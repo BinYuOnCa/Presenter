@@ -57,5 +57,5 @@ rm -f "$ZIP"
 ditto -c -k --keepParent "$HERE" "$ZIP"
 echo "📦 拷到别的 Mac 用：$ZIP"
 echo
-echo "   本机彩排：open Presenter.app --args --test --countdown 10"
+echo "   彩排：killall Presenter; open Presenter.app --args --test --countdown 10"
 echo "   正式：双击 Presenter.app（10:25 之前打开即可）"

@@ -440,6 +440,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
     var hotkeyProblems = 0
     var obsSummary = ""
 
+    // 状态提示框
+    var hud: NSPanel?
+    var hudTimer: Timer?
+
     var countdownLength: TimeInterval {
         return TimeInterval(seconds(pdfHMS) - seconds(countdownHMS))
     }
@@ -497,6 +501,92 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         RunLoop.main.add(t, forMode: .common)
         timer = t
         tick()
+        showHUD(reopened: false)
+    }
+
+    // 程序已在运行时又被双击 / open：显示状态提示（新的启动参数不会生效）
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        writeLog("再次打开：程序已在运行，新的启动参数不会生效")
+        showHUD(reopened: true)
+        return false
+    }
+
+    // MARK: 状态提示框（在内建屏上方显示几秒，告诉你程序在运行、状态如何）
+
+    func showHUD(reopened: Bool) {
+        var title = reopened ? "Presenter 已经在运行" : "Presenter 已启动"
+        if testMode { title += "（测试模式）" }
+        var lines: [String] = [title]
+        if reopened { lines.append("要换成测试模式等其他参数，请先退出再打开") }
+        lines.append("时间表：\(hms(schedule.clock)) 时钟 → \(hms(schedule.countdown)) 倒计时 → \(hms(schedule.pdf)) PDF")
+        lines.append("当前：\(phase.name)")
+        if let u = existingPDF() {
+            lines.append("PDF：✅ \(u.lastPathComponent)")
+        } else {
+            lines.append("PDF：⚠️ 找不到 \(pdfBaseName()).pdf")
+        }
+        if let sc = targetScreen() {
+            lines.append("投影屏：✅ \(screenLabel(sc))")
+        } else if testMode {
+            lines.append("投影屏：未检测到（测试模式在本屏中间小窗预览）")
+        } else {
+            lines.append("投影屏：⚠️ 未检测到，接上投影（扩展模式）后才会显示")
+        }
+        if hotkeyProblems > 0 { lines.append("快捷键：⚠️ 有冲突，详见菜单栏图标") }
+        for p in problems { lines.append("⚠️ \(p)") }
+        var control = "控制：点菜单栏的 ⏱ 图标"
+        if let q = hotkeyLabels[.quit] { control += "　·　退出：\(q)" }
+        lines.append(control)
+        let text = lines.joined(separator: "\n")
+
+        guard let screen = NSScreen.screens.first(where: { isBuiltIn($0) }) ?? NSScreen.main ?? NSScreen.screens.first else { return }
+        let font = NSFont.systemFont(ofSize: 15)
+        let textRect = (text as NSString).boundingRect(with: NSSize(width: 3000, height: 3000),
+                                                       options: [.usesLineFragmentOrigin],
+                                                       attributes: [.font: font], context: nil)
+        let pad: CGFloat = 22
+        let labelSize = NSSize(width: ceil(textRect.width) + 10, height: ceil(textRect.height) + 6)
+        let size = NSSize(width: labelSize.width + pad * 2, height: labelSize.height + pad * 2)
+        let vf = screen.visibleFrame
+        let frame = NSRect(x: vf.midX - size.width / 2, y: vf.maxY - size.height - 30,
+                           width: size.width, height: size.height)
+
+        let hp: NSPanel
+        if let existing = hud {
+            hp = existing
+        } else {
+            hp = NSPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            hp.isReleasedWhenClosed = false
+            hp.hidesOnDeactivate = false
+            hp.level = .statusBar
+            hp.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
+            hp.ignoresMouseEvents = true
+            hp.isOpaque = false
+            hp.backgroundColor = .clear
+            hp.hasShadow = true
+            hud = hp
+        }
+        let bg = NSView(frame: NSRect(x: 0, y: 0, width: size.width, height: size.height))
+        bg.wantsLayer = true
+        bg.layer?.backgroundColor = NSColor(white: 0.08, alpha: 0.9).cgColor
+        bg.layer?.cornerRadius = 14
+        let label = NSTextField(wrappingLabelWithString: text)
+        label.font = font
+        label.textColor = .white
+        label.frame = NSRect(x: pad, y: pad, width: labelSize.width, height: labelSize.height)
+        bg.addSubview(label)
+        hp.contentView = bg
+        hp.setFrame(frame, display: true)
+        hp.orderFrontRegardless()
+
+        hudTimer?.invalidate()
+        let t = Timer(timeInterval: reopened ? 8 : 6, target: self, selector: #selector(hideHUD), userInfo: nil, repeats: false)
+        RunLoop.main.add(t, forMode: .common)
+        hudTimer = t
+    }
+
+    @objc func hideHUD() {
+        hud?.orderOut(nil)
     }
 
     func applicationWillTerminate(_ notification: Notification) {
