@@ -28,6 +28,16 @@
    如果提示没有编译器，先运行 `xcode-select --install`，装完（5–15 分钟）再运行 `bash build.sh`。
    装过 Homebrew 的电脑一般已经有了。成功后文件夹里会出现 `Presenter.app`。
 
+   **直播用的 Mac 没有 Xcode？** 在任意一台有 Xcode 的 Mac 上编译，再拷过去即可：
+   1. 在有 Xcode 的 Mac 上做上面第 1、2 步。编译完会在主目录生成 `Presenter-ready.zip`
+      （通用版本，M 芯片和 Intel 都能用，需要 macOS 10.15 及以上）。
+   2. 用 AirDrop 或 U 盘把 `Presenter-ready.zip` 传到直播 Mac，解压后同样放到主目录 `~/Presenter`。
+   3. 在直播 Mac 的终端运行一次（去掉“从网络下载”的标记，否则系统会拦着不让打开）：
+      ```bash
+      xattr -dr com.apple.quarantine ~/Presenter
+      ```
+   4. 在直播 Mac 上做一次彩排（见第四节）。
+
 3. **显示器设置**：系统设置 → 显示器，投影仪设为 **扩展显示器**（不要“镜像”）。
    建议把内建屏设为主显示器（菜单栏在内建屏），这样通知横幅不会弹在投影上。
 
