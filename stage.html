@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stage</title>
+<!--
+  投影舞台页：10:25 显示时钟，10:28:30 起同一位置变成倒计时，其余内容不变。
+  ✏️ 改文字：直接改下面 <body> 里标了 ✏️ 的几行。
+  🖼 改图片：把背景图放到 images/background.jpg，徽标放到 images/logo.png（没有就自动不显示）。
+  👀 预览：用 Safari/Chrome 直接打开本文件；加 ?mode=countdown&s=90 预览倒计时。
+-->
+<style>
+  /* ========== 🎨 颜色与大小（可改） ========== */
+  :root {
+    --bg-top: #13213f;
+    --bg-bottom: #05070d;
+    --text: #ffffff;
+    --muted: rgba(255, 255, 255, 0.78);
+    --accent: #f3c977;
+    --time-size: min(30vh, 15.5vw);
+  }
+
+  html, body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    cursor: none;
+    background: var(--bg-bottom);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", "Hiragino Sans GB", "Helvetica Neue", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* 背景：图片在上，图片缺失时露出渐变；再叠一层暗化保证文字清楚 */
+  .bg {
+    position: fixed;
+    top: 0; right: 0; bottom: 0; left: 0;
+    background:
+      linear-gradient(180deg, rgba(5, 7, 13, 0.35) 0%, rgba(5, 7, 13, 0.12) 45%, rgba(5, 7, 13, 0.70) 100%),
+      url("images/background.jpg") center / cover no-repeat,
+      radial-gradient(120% 90% at 50% 0%, var(--bg-top), var(--bg-bottom));
+  }
+
+  .stage {
+    position: relative;
+    box-sizing: border-box;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: space-between;
+    padding: 7vh 6vw 6vh;
+    text-align: center;
+    text-shadow: 0 0.04em 0.25em rgba(0, 0, 0, 0.35);
+  }
+
+  header { display: flex; flex-direction: column; align-items: center; }
+  .logo { height: 11vh; width: auto; margin-bottom: 2vh; }
+  h1 { margin: 0; font-size: 7.5vh; font-weight: 600; letter-spacing: 0.08em; }
+  .sub { margin: 1.4vh 0 0; font-size: 3.4vh; font-weight: 400; color: var(--muted); letter-spacing: 0.14em; }
+
+  main { display: flex; flex-direction: column; align-items: center; }
+  .time {
+    font-size: var(--time-size);
+    font-weight: 500;
+    line-height: 1;
+    letter-spacing: 0.01em;
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1;
+    white-space: nowrap;
+  }
+  .date { margin-top: 2.2vh; font-size: 4vh; color: var(--muted); letter-spacing: 0.1em; }
+
+  footer { font-size: 3.2vh; color: var(--muted); letter-spacing: 0.08em; }
+  footer::before {
+    content: "";
+    display: block;
+    width: 8vw;
+    height: 0.3vh;
+    margin: 0 auto 2.4vh;
+    background: var(--accent);
+    opacity: 0.85;
+  }
+  footer p { margin: 0; }
+
+  /* 想让倒计时换颜色，可以取消下一行的注释 */
+  /* body[data-mode="countdown"] .time { color: var(--accent); } */
+</style>
+</head>
+<body data-mode="clock">
+  <div class="bg"></div>
+  <div class="stage">
+    <header>
+      <img class="logo" src="images/logo.png" alt="" onerror="this.remove()">
+      <h1>欢迎</h1>                           <!-- ✏️ 主标题 -->
+      <p class="sub">Welcome</p>              <!-- ✏️ 副标题（不要可整行删掉） -->
+    </header>
+
+    <main>
+      <div class="time" id="time">--:--:--</div>
+      <div class="date" id="date"></div>      <!-- 日期行，不要可整行删掉 -->
+    </main>
+
+    <footer>
+      <p>请将手机调至静音 · Please silence your phone</p>   <!-- ✏️ 底部文字 -->
+    </footer>
+  </div>
+
+<script>
+(function () {
+  // ========== ⚙️ 显示格式（可改） ==========
+  // 倒计时格式：'m:ss' → 1:30 ；'mm:ss' → 01:30 ；'s' → 90
+  var COUNTDOWN_FORMAT = 'm:ss';
+
+  var timeEl = document.getElementById('time');
+  var dateEl = document.getElementById('date');
+  var WEEK = '日一二三四五六';
+  var mode = 'clock', target = 0, lastTime = '', lastDate = '';
+
+  function p2(n) { return (n < 10 ? '0' : '') + n; }
+
+  function fmtCountdown(left) {
+    if (COUNTDOWN_FORMAT === 's') return String(left);
+    var m = Math.floor(left / 60), s = left % 60;
+    return (COUNTDOWN_FORMAT === 'mm:ss' ? p2(m) : String(m)) + ':' + p2(s);
+  }
+
+  function render() {
+    var now = new Date();
+    var t;
+    if (mode === 'countdown') {
+      t = fmtCountdown(Math.max(0, Math.ceil((target - now.getTime()) / 1000)));
+    } else {
+      t = p2(now.getHours()) + ':' + p2(now.getMinutes()) + ':' + p2(now.getSeconds());
+    }
+    if (t !== lastTime) { timeEl.textContent = t; lastTime = t; }
+    if (dateEl) {
+      var d = now.getFullYear() + '年' + (now.getMonth() + 1) + '月' + now.getDate() + '日　星期' + WEEK.charAt(now.getDay());
+      if (d !== lastDate) { dateEl.textContent = d; lastDate = d; }
+    }
+  }
+
+  // Presenter 程序通过这个函数切换：setMode('clock') / setMode('countdown', 结束时刻的毫秒时间戳)
+  window.setMode = function (m, t) {
+    mode = (m === 'countdown') ? 'countdown' : 'clock';
+    target = Number(t) || 0;
+    document.body.setAttribute('data-mode', mode);
+    lastTime = '';
+    render();
+  };
+
+  // 在浏览器里单独打开时的预览：stage.html?mode=countdown&s=90
+  var q = new URLSearchParams(location.search);
+  if (q.get('mode') === 'countdown') {
+    window.setMode('countdown', Date.now() + (Number(q.get('s')) || 90) * 1000);
+  } else {
+    window.setMode('clock', 0);
+  }
+  setInterval(render, 50);
+})();
+</script>
+</body>
+</html>

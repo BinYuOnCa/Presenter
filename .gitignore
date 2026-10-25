@@ -1,0 +1,9 @@
+# 每台电脑自己的文件，不放进仓库
+rclone
+presenter.log
+cron.log
+gdrive-state.json
+transcripts/
+Presenter.app/
+Presenter-ready.zip
+.DS_Store
