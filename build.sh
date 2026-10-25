@@ -39,11 +39,12 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleDisplayName</key><string>Presenter</string>
   <key>CFBundleExecutable</key><string>Presenter</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>1.0</string>
-  <key>CFBundleVersion</key><string>1</string>
+  <key>CFBundleShortVersionString</key><string>2.0</string>
+  <key>CFBundleVersion</key><string>2</string>
   <key>LSMinimumSystemVersion</key><string>11.0</string>
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
+  <key>NSDownloadsFolderUsageDescription</key><string>Presenter 需要读取“下载”文件夹里当天的 PDF。</string>
 </dict>
 </plist>
 PLIST
@@ -57,5 +58,6 @@ rm -f "$ZIP"
 ditto -c -k --keepParent "$HERE" "$ZIP"
 echo "📦 拷到别的 Mac 用：$ZIP"
 echo
-echo "   彩排：killall Presenter; open Presenter.app --args --test --countdown 10"
-echo "   正式：双击 Presenter.app（10:25 之前打开即可）"
+echo "   彩排：killall Presenter; open Presenter.app --args --test"
+echo "   注意：每次重新编译后，第一次运行时系统会询问能否读取“下载”文件夹，请点“好/允许”。"
+echo "   自动启动：bash autostart.sh on（每周日 9:09）"

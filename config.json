@@ -1,18 +1,27 @@
 {
-  "_说明": "改完保存后，退出并重新打开 Presenter 才生效。时间是 24 小时制 HH:MM:SS。",
-  "clockAt": "10:25:00",
-  "countdownAt": "10:28:30",
-  "pdfAt": "10:30:00",
+  "_说明": "改完保存后，退出并重新打开 Presenter 才生效。时间为 24 小时制 HH:MM:SS。",
 
-  "_pdf说明": "PDF 文件夹：相对路径从 Presenter 文件夹算起，也可写完整路径如 ~/Desktop。文件名格式 yyyyMMdd 表示 20261025.pdf",
-  "pdfFolder": "pdf",
-  "pdfNameFormat": "yyyyMMdd",
+  "_schedule说明": "show 可选：welcome（欢迎页）、clock（时钟）、countdown（倒计时，到下一项开始为止）、quit（退出程序），或下面 pdfs 里的名字。时间必须从早到晚排列。",
+  "schedule": [
+    { "at": "09:10:00", "show": "welcome" },
+    { "at": "09:12:00", "show": "pdf1" },
+    { "at": "10:18:00", "show": "welcome" },
+    { "at": "10:21:00", "show": "clock" },
+    { "at": "10:28:30", "show": "countdown" },
+    { "at": "10:30:00", "show": "pdf2" },
+    { "at": "12:15:00", "show": "quit" }
+  ],
+
+  "_pdfs说明": "PDF 文件名规则（正则表达式），{date} 会换成当天日期（格式见 dateFormat，yyyyMMdd = 20261025）。JSON 里的反斜杠要写两个。有多个文件符合时用最新的那个。",
+  "pdfFolder": "~/Downloads",
+  "dateFormat": "yyyyMMdd",
+  "pdfs": {
+    "pdf1": "^[ A-Z][a-z]+-{date}\\.pdf$",
+    "pdf2": "^{date}\\.pdf$"
+  },
 
   "_screen说明": "一般留空（自动选外接屏）。接了多块外接屏时，填投影屏名字里的几个字。",
   "screenName": "",
-
-  "_late说明": "程序晚开时（例如 10:40 才打开），在 PDF 时间之后这么多分钟内会直接显示 PDF；超过就不自动显示。",
-  "lateStartMinutes": 240,
 
   "hotkeys": {
     "_说明": "写法：ctrl/alt/shift/cmd + 键名。键名：a-z 0-9 left right up down space escape pageup pagedown home end f1-f20。一个动作可写多个，[] 表示不用。用翻页笔：在 next 里加 \"pagedown\"、prev 里加 \"pageup\"。",
@@ -22,8 +31,9 @@
     "last":         [],
     "black":        ["ctrl+alt+b"],
     "pdfNow":       ["ctrl+alt+p"],
-    "countdownNow": [],
+    "welcomeNow":   [],
     "clockNow":     [],
+    "countdownNow": [],
     "auto":         [],
     "quit":         ["ctrl+alt+escape"]
   }
