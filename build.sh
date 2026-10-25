@@ -1,7 +1,7 @@
 #!/bin/bash
 # 编译 Presenter.app（只需做一次；改了 presenter.swift 才需要重新编译）
-# 生成的是通用版本（M 系列芯片和 Intel 都能运行，macOS 10.15 及以上），
-# 可以在一台有 Xcode 的 Mac 上编译，然后拷到别的 Mac 上运行。
+# 生成 Apple 芯片（M1 及以后）版本，需 macOS 11 及以上。
+# 可以在一台有 Xcode 的 Mac 上编译，然后拷到别的 Apple 芯片 Mac 上运行。
 set -euo pipefail
 cd "$(dirname "$0")"
 HERE="$(pwd)"
@@ -19,24 +19,15 @@ trap 'rm -rf "$TMP"' EXIT
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
 
-BUILT=()
-for ARCH in arm64 x86_64; do
-  echo "▶ 正在编译 $ARCH …"
-  if xcrun swiftc -O -swift-version 5 \
-       -target "${ARCH}-apple-macos10.15" \
-       -framework Cocoa -framework WebKit -framework PDFKit -framework Carbon \
-       presenter.swift -o "$TMP/Presenter-$ARCH"; then
-    BUILT+=("$TMP/Presenter-$ARCH")
-  else
-    echo "⚠️  $ARCH 编译失败"
-  fi
-done
-
-if [ ${#BUILT[@]} -eq 0 ]; then
+echo "▶ 正在编译（Apple 芯片 arm64）…"
+if ! xcrun swiftc -O -swift-version 5 \
+     -target arm64-apple-macos11.0 \
+     -framework Cocoa -framework WebKit -framework PDFKit -framework Carbon \
+     presenter.swift -o "$TMP/Presenter"; then
   echo "❌ 编译失败，请把上面的错误信息发给我"
   exit 1
 fi
-xcrun lipo -create -output "$APP/Contents/MacOS/Presenter" "${BUILT[@]}"
+cp "$TMP/Presenter" "$APP/Contents/MacOS/Presenter"
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -50,7 +41,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>1.0</string>
   <key>CFBundleVersion</key><string>1</string>
-  <key>LSMinimumSystemVersion</key><string>10.15</string>
+  <key>LSMinimumSystemVersion</key><string>11.0</string>
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
 </dict>
@@ -58,7 +49,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 PLIST
 
 codesign --force --sign - "$APP" >/dev/null 2>&1 || true
-echo "✅ 已生成 $HERE/$APP（$(xcrun lipo -archs "$APP/Contents/MacOS/Presenter")）"
+echo "✅ 已生成 $HERE/$APP"
 
 # 打一个可以直接拷到别的 Mac 的压缩包（ditto 会完整保留 App 的签名）
 ZIP="$(dirname "$HERE")/Presenter-ready.zip"

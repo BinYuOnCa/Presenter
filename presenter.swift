@@ -813,8 +813,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
             if refreshPDF() {
                 showPDF()
             } else {
-                writeLog("⚠️ 找不到或打不开今天的 PDF（\(pdfBaseName()).pdf），先显示时钟，每 2 秒重试")
-                showStage(mode: "clock", target: nil)
+                writeLog("⚠️ 找不到或打不开今天的 PDF（\(pdfBaseName()).pdf），先显示倒计时结束语，每 2 秒重试")
+                // 倒计时的结束时刻设为“现在”，舞台页就会显示结束语（如“敬拜马上开始!”）
+                showStage(mode: "countdown", target: Date())
             }
         }
     }
