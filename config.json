@@ -27,18 +27,20 @@
     "warnFor": ["pdf1", "pdf2"]
   },
 
-  "_caption说明": "实时翻译字幕条。when：firstSunday（每月第一个星期天）、sunday（每个星期天）、always（每天）、never（只手动打开）。showDuring：哪些画面时显示。heightPercent：占投影高度的百分比。lines：显示几行。mode：text（提取文字显示大字）或 page（直接显示原网页）。textSelector：一般留空（自动寻找）；自动找得不准时填 CSS 选择器。overlay：false = PDF 缩到上方，true = 字幕条盖在 PDF 下部。",
+  "_caption说明": "实时翻译字幕条。when：firstSunday（每月第一个星期天）、sunday（每个星期天）、always（每天）、never（只手动打开）。showDuring：哪些画面时显示；from/to：几点开始/停止自动显示（to 留空 = 到画面结束）。随时可按 ⌃⌥T 手动显示/隐藏。heightPercent：占投影高度的百分比。lines：显示几行。overlay：true = 叠加在 PDF 下部（PDF 保持全屏，做 PDF 时把这些页的下方 1/5 留白），false = PDF 缩到上方 4/5。background：颜色，或 transparent（透明，字直接显示在 PDF 留白处，带黑色描边）。mode：text（提取文字显示大字）或 page（直接显示原网页）。textSelector：一般留空（自动寻找），找得不准时填 CSS 选择器。",
   "caption": {
     "url": "https://app.withkaleo.com/c/oakville-chinese-hope-church",
     "when": "firstSunday",
     "showDuring": ["pdf2"],
+    "from": "10:40:00",
+    "to": "",
     "heightPercent": 20,
     "lines": 3,
     "mode": "text",
     "textSelector": "",
     "color": "#ffffff",
     "background": "#000000",
-    "overlay": false,
+    "overlay": true,
     "pageZoom": 1.5,
     "reloadIfStaleMinutes": 10
   },

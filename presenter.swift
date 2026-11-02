@@ -175,13 +175,15 @@ struct CaptionConfig {
     var url = "https://app.withkaleo.com/c/oakville-chinese-hope-church"
     var when = "firstSunday"            // firstSunday | sunday | always | never
     var showDuring: [String] = ["pdf2"]
+    var from = "10:40:00"               // 几点开始自动显示（空 = 画面一开始就显示）
+    var to = ""                         // 几点停止自动显示（空 = 一直到画面结束）
     var heightPercent: Double = 20
     var lines = 3
     var mode = "text"                   // text（提取文字显示大字）| page（显示原网页）
     var textSelector = ""
     var color = "#ffffff"
     var background = "#000000"
-    var overlay = false                 // true = 盖在 PDF 下部；false = PDF 缩到上方 4/5
+    var overlay = true                  // true = 叠加在 PDF 下部（PDF 保持全屏）；false = PDF 缩到上方 4/5
     var pageZoom: Double = 1.5
     var reloadIfStaleMinutes: Double = 10
 }
@@ -657,7 +659,7 @@ window.setMode=function(m,t,o){mode=m;target=Number(t)||0;off=Number(o)||0;r()};
 // 字幕条：显示从翻译网页提取到的最新文字，底部对齐，只显示最后几行
 let captionHTML = #"""
 <!doctype html><html><head><meta charset="utf-8"><style>
-html,body{margin:0;height:100%;overflow:hidden;cursor:none;background:#000}
+html,body{margin:0;height:100%;overflow:hidden;cursor:none;background:transparent}
 #box{position:fixed;top:0;right:0;bottom:0;left:0;box-sizing:border-box;padding:0 3vw;display:flex;flex-direction:column;justify-content:center}
 #clip{overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end}
 #t{color:#fff;font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue","PingFang SC",sans-serif;font-weight:600;overflow-wrap:break-word;word-wrap:break-word}
@@ -667,7 +669,7 @@ html,body{margin:0;height:100%;overflow:hidden;cursor:none;background:#000}
 var clip=document.getElementById('clip'),el=document.getElementById('t'),ph='',has=false,lines=3;
 function layout(){var h=window.innerHeight||200;var lh=Math.max(10,Math.floor(h*0.88/lines));clip.style.height=(lh*lines)+'px';el.style.lineHeight=lh+'px';el.style.fontSize=Math.floor(lh/(has?1.22:2))+'px';}
 function show(t){if(t){has=true;el.className='';if(el.textContent!==t){el.textContent=t;}}else{has=false;el.className='ph';el.textContent=ph;}layout();}
-window.setStyle=function(fg,bg,n,placeholder){el.style.color=fg;document.body.style.background=bg;lines=Math.max(1,Number(n)||3);ph=placeholder;show(has?el.textContent:'');};
+window.setStyle=function(fg,bg,n,placeholder){el.style.color=fg;document.documentElement.style.background=bg;document.body.style.background=bg;var light=true;try{var m=getComputedStyle(el).color.match(/\d+(\.\d+)?/g);light=(0.299*m[0]+0.587*m[1]+0.114*m[2])>140;}catch(e){}el.style.textShadow=(String(bg).toLowerCase()==='transparent')?(light?'0 0 6px rgba(0,0,0,.95),0 0 2px #000':'0 0 6px rgba(255,255,255,.95),0 0 2px #fff'):'none';lines=Math.max(1,Number(n)||3);ph=placeholder;show(has?el.textContent:'');};
 window.setCaption=function(t){show(t);};
 window.addEventListener('resize',layout);layout();
 })();
@@ -1061,7 +1063,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
     var captionToday = false
     var captionForced: Bool?            // --caption / --nocaption
     var captionOverride: Bool?          // 菜单/快捷键手动开关；nil = 自动
+    var captionOverrideBase = false     // 手动开关时“自动”应该是什么状态；自动状态变了就恢复自动
     var captionMode = "text"
+    var captionFrom: HMSTime?
+    var captionTo: HMSTime?
     var captionVisible = false
     var captionPageLoaded = false
     var sourceRequested = false
@@ -1262,6 +1267,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
             if let v = c["url"] as? String { cfg.caption.url = v.trimmingCharacters(in: .whitespaces) }
             if let v = c["when"] as? String { cfg.caption.when = v }
             if let v = c["showDuring"] as? [String] { cfg.caption.showDuring = v }
+            if let v = c["from"] as? String { cfg.caption.from = v.trimmingCharacters(in: .whitespaces) }
+            if let v = c["to"] as? String { cfg.caption.to = v.trimmingCharacters(in: .whitespaces) }
             if let v = c["heightPercent"] as? Double, v >= 5, v <= 50 { cfg.caption.heightPercent = v }
             if let v = c["lines"] as? Int, v >= 1, v <= 6 { cfg.caption.lines = v }
             if let v = c["mode"] as? String, v == "text" || v == "page" { cfg.caption.mode = v }
@@ -1333,6 +1340,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         let known = stageShows.union(cfg.pdfPatterns.keys)
         for s in cfg.caption.showDuring where !known.contains(s) || s == "quit" {
             problems.append("caption.showDuring 里的“\(s)”不认识")
+        }
+        if !cfg.caption.from.isEmpty {
+            if let t = parseHMS(cfg.caption.from) { captionFrom = t } else {
+                problems.append("caption.from 的时间“\(cfg.caption.from)”格式不对（应为 HH:MM:SS），已忽略")
+            }
+        }
+        if !cfg.caption.to.isEmpty {
+            if let t = parseHMS(cfg.caption.to) { captionTo = t } else {
+                problems.append("caption.to 的时间“\(cfg.caption.to)”格式不对（应为 HH:MM:SS），已忽略")
+            }
         }
         if !["firstSunday", "sunday", "always", "never"].contains(cfg.caption.when) {
             problems.append("caption.when 只能是 firstSunday、sunday、always、never，已按 firstSunday 处理")
@@ -1470,6 +1487,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         // 字幕条
         captionView = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
         captionView.navigationDelegate = self
+        if cfg.caption.background.lowercased() == "transparent" {
+            // 透明背景：字直接显示在 PDF 上（需要关掉网页视图自己的白底）
+            if captionView.responds(to: NSSelectorFromString("setDrawsBackground:"))
+                || captionView.responds(to: NSSelectorFromString("_setDrawsBackground:")) {
+                captionView.setValue(false, forKey: "drawsBackground")
+            } else {
+                problems.append("这台 Mac 不支持透明的字幕条背景，已改用黑色")
+                cfg.caption.background = "#000000"
+            }
+        }
         captionView.isHidden = true
         c.addSubview(captionView)
         captionView.loadHTMLString(captionHTML, baseURL: nil)
@@ -1815,7 +1842,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
             apply(desired, index: desiredIndex)
             applied = true
         }
-        updateCaptionVisibility()
+        updateCaptionVisibility(now)
 
         // PDF 时间到了但文件缺失/打不开：每 2 秒重试
         if case .pdf(let key) = currentScene, pdfShownKey == nil, tickCount % 40 == 0 {
@@ -2057,25 +2084,61 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
 
     // MARK: 实时翻译
 
-    func shouldShowCaption() -> Bool {
+    func shouldShowCaption(_ now: Date) -> Bool {
         guard currentScene.isVisible else { return false }
         if let o = captionOverride { return o }
-        return captionToday && cfg.caption.showDuring.contains(currentScene.key)
+        return captionAutoVisible(now)
+    }
+
+    /// 按日期、画面和时段，现在应不应该自动显示
+    func captionAutoVisible(_ now: Date) -> Bool {
+        return captionToday && cfg.caption.showDuring.contains(currentScene.key) && captionInWindow(now)
+    }
+
+    /// 在 caption.from ~ caption.to 时段内（测试模式的时间表是压缩的，不看时段）
+    func captionInWindow(_ now: Date) -> Bool {
+        if testMode { return true }
+        let day = Calendar.current.startOfDay(for: now)
+        if let f = captionFrom, now < dateOn(day, f) { return false }
+        if let t = captionTo, now >= dateOn(day, t) { return false }
+        return true
+    }
+
+    /// 下一次自动显示实时翻译的时间（画面开始时间和 from 时间取较晚的）
+    func nextCaptionStart(_ now: Date) -> Date? {
+        let day = Calendar.current.startOfDay(for: now)
+        var start: Date?
+        if cfg.caption.showDuring.contains(currentScene.key) {
+            start = now
+        } else {
+            let idx = currentItemIndex(now)
+            if let j = timeline.indices.first(where: { $0 > idx && cfg.caption.showDuring.contains(timeline[$0].show) }) {
+                start = timeline[j].at
+            }
+        }
+        guard var s = start else { return nil }
+        if !testMode {
+            if let f = captionFrom, dateOn(day, f) > s { s = dateOn(day, f) }
+            if let t = captionTo, s >= dateOn(day, t) { return nil }
+        }
+        return s
     }
 
     /// 现在或 2 分钟内要显示实时翻译 → 需要载入网页
     func captionNeededSoon(_ now: Date) -> Bool {
-        if shouldShowCaption() || captionOverride == true { return true }
+        if shouldShowCaption(now) || captionOverride == true { return true }
         if captionOverride == false || !captionToday { return false }
-        let idx = currentItemIndex(now)
-        for j in timeline.indices where j > idx && cfg.caption.showDuring.contains(timeline[j].show) {
-            return timeline[j].at.timeIntervalSince(now) < 120
-        }
-        return false
+        guard let start = nextCaptionStart(now) else { return false }
+        return start.timeIntervalSince(now) < 120
     }
 
-    func updateCaptionVisibility() {
-        let show = shouldShowCaption()
+    func updateCaptionVisibility(_ now: Date) {
+        // 手动开关只管到下一个自动开关点（例如 10:40 自动打开、画面结束自动关闭），之后恢复自动
+        if captionOverride != nil && captionAutoVisible(now) != captionOverrideBase {
+            captionOverride = nil
+            writeLog("实时翻译：到了自动开关的时间，恢复自动")
+        }
+        let show = shouldShowCaption(now)
         guard show != captionVisible else { return }
         captionVisible = show
         writeLog(show ? "显示实时翻译" : "隐藏实时翻译")
@@ -2153,9 +2216,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
 
     func setCaptionOverride(_ v: Bool?) {
         captionOverride = v
+        captionOverrideBase = captionAutoVisible(appNow())
         let text = v == nil ? "自动" : (v == true ? "显示（手动）" : "隐藏（手动）")
         writeLog("实时翻译：\(text)")
-        infoHUD.show("实时翻译：\(text)", on: builtInScreen(), seconds: 3)
+        var hint = ""
+        if let k = hotkeyLabels[.caption], v != nil { hint = "\n再按 \(k) " + (v == true ? "隐藏" : "显示") }
+        infoHUD.show("实时翻译：\(text)\(hint)", on: builtInScreen(), seconds: 3)
         if v == true && !sourceRequested { loadSource("手动打开") }
         tick()
     }
@@ -2432,7 +2498,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
     }
 
     func captionDuringText() -> String {
-        return cfg.caption.showDuring.map { showLabel($0) }.joined(separator: "、")
+        var t = cfg.caption.showDuring.map { showLabel($0) }.joined(separator: "、")
+        if let f = captionFrom, let e = captionTo {
+            t += "（\(f.h):\(pad2(f.m))–\(e.h):\(pad2(e.m))）"
+        } else if let f = captionFrom {
+            t += "（\(f.h):\(pad2(f.m)) 起）"
+        } else if let e = captionTo {
+            t += "（到 \(e.h):\(pad2(e.m))）"
+        }
+        return t
     }
 
     func captionDayText() -> String {
@@ -2572,8 +2646,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         cm.addItem(NSMenuItem.separator())
         addAction(cm, .caption, "显示/隐藏（切换）", #selector(menuCaptionToggle))
         addAction(cm, nil, "自动（按日期和时间表）", #selector(menuCaptionAuto), on: captionOverride == nil)
-        addAction(cm, nil, "一直显示", #selector(menuCaptionOn), on: captionOverride == true)
+        addAction(cm, nil, "显示", #selector(menuCaptionOn), on: captionOverride == true)
         addAction(cm, nil, "隐藏", #selector(menuCaptionOff), on: captionOverride == false)
+        addInfo(cm, "（手动显示/隐藏到下一个自动开关时间为止）")
         cm.addItem(NSMenuItem.separator())
         addAction(cm, nil, "显示方式：提取文字（大字）", #selector(menuCaptionText), on: captionMode == "text")
         addAction(cm, nil, "显示方式：原网页", #selector(menuCaptionPage), on: captionMode == "page")
