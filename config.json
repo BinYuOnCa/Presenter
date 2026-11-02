@@ -20,6 +20,29 @@
     "pdf2": "^{date}\\.pdf$"
   },
 
+  "_extend说明": "PDF 结束前 warnSeconds 秒，内建屏上方弹出橙色提醒；这时（或任何时候）按 extend 快捷键（默认 ⌃⌥E），当前画面延长 minutes 分钟，可以连按。不操作就按时间表切换。warnFor：哪些 PDF 结束前提醒，[] 表示都不提醒。",
+  "extend": {
+    "minutes": 2,
+    "warnSeconds": 60,
+    "warnFor": ["pdf1", "pdf2"]
+  },
+
+  "_caption说明": "实时翻译字幕条。when：firstSunday（每月第一个星期天）、sunday（每个星期天）、always（每天）、never（只手动打开）。showDuring：哪些画面时显示。heightPercent：占投影高度的百分比。lines：显示几行。mode：text（提取文字显示大字）或 page（直接显示原网页）。textSelector：一般留空（自动寻找）；自动找得不准时填 CSS 选择器。overlay：false = PDF 缩到上方，true = 字幕条盖在 PDF 下部。",
+  "caption": {
+    "url": "https://app.withkaleo.com/c/oakville-chinese-hope-church",
+    "when": "firstSunday",
+    "showDuring": ["pdf2"],
+    "heightPercent": 20,
+    "lines": 3,
+    "mode": "text",
+    "textSelector": "",
+    "color": "#ffffff",
+    "background": "#000000",
+    "overlay": false,
+    "pageZoom": 1.5,
+    "reloadIfStaleMinutes": 10
+  },
+
   "_screen说明": "一般留空（自动选外接屏）。接了多块外接屏时，填投影屏名字里的几个字。",
   "screenName": "",
 
@@ -30,11 +53,13 @@
     "first":        ["ctrl+alt+1"],
     "last":         [],
     "black":        ["ctrl+alt+b"],
+    "extend":       ["ctrl+alt+e"],
+    "auto":         ["ctrl+alt+r"],
+    "caption":      ["ctrl+alt+t"],
     "pdfNow":       ["ctrl+alt+p"],
     "welcomeNow":   [],
     "clockNow":     [],
     "countdownNow": [],
-    "auto":         [],
     "quit":         ["ctrl+alt+escape"]
   }
 }
