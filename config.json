@@ -16,8 +16,18 @@
   "pdfFolder": "~/Downloads",
   "dateFormat": "yyyyMMdd",
   "pdfs": {
-    "pdf1": "^[ A-Z][a-z]+-{date}\\.pdf$",
+    "pdf1": "^[A-Z][a-z]+-{date}\\.pdf$",
     "pdf2": "^{date}\\.pdf$"
+  },
+
+  "_gdrive说明": "启动时（以及每个 PDF 开始前 recheckBeforeMinutes 分钟）用 rclone 从 Google Drive 文件夹把今天的 Google Slides 导出成 PDF，存到上面的 pdfFolder（下载文件夹）。文件名规则同 pdfs。folderId：文件夹网址里 folders/ 后面那一串。remote：rclone config 时起的名字。rclone：留空 = 自动找（Presenter 文件夹里的 rclone 优先）。waitSeconds：PDF 到点时还在下载，最多等几秒。",
+  "gdrive": {
+    "enabled": true,
+    "folderId": "",
+    "remote": "gdrive",
+    "rclone": "",
+    "recheckBeforeMinutes": 4,
+    "waitSeconds": 60
   },
 
   "_extend说明": "PDF 结束前 warnSeconds 秒，内建屏上方弹出橙色提醒；这时（或任何时候）按 extend 快捷键（默认 ⌃⌥E），当前画面延长 minutes 分钟，可以连按。不操作就按时间表切换。warnFor：哪些 PDF 结束前提醒，[] 表示都不提醒。",

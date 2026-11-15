@@ -5,7 +5,8 @@
 | 时间 | 投影屏显示（全屏） |
 |---|---|
 | 09:10:00 | 欢迎页：居中显示 Logo 和中英文欢迎语，四周留白 10% |
-| 09:12:00 | **pdf1**：`~/Downloads` 里符合 `^[ A-Z][a-z]+-yyyymmdd.pdf$` 的文件（如 `Sunday-20261025.pdf`），第 1 页 |
+| 启动时 | 从 Google Drive 指定文件夹把今天的两个 Google Slides 导出成 PDF，存进 `~/Downloads`（见第三节） |
+| 09:12:00 | **pdf1**：`~/Downloads` 里符合 `^[A-Z][a-z]+-yyyymmdd.pdf$` 的文件（如 `Sunday-20261025.pdf`），第 1 页 |
 | 10:18:00 | 关闭 pdf1，回到欢迎页（10:17 会先提醒，需要时按 `⌃⌥E` 延长） |
 | 10:21:00 | 时钟页：Logo、固定文字、日期和当前时间（带秒），四周留白 10% |
 | 10:28:30 | 其他不变，时间变成 90 秒倒计时（01:30 → 00:01） |
@@ -51,26 +52,57 @@ xattr -dr com.apple.quarantine ~/Presenter
 rm -rf ~/Downloads/Presenter ~/Downloads/Presenter-ready.zip
 ```
 只换 App、`config.json` 和说明；`images/LogoNew.png`、`stage.html`、crontab 设置都不动。
-（如果你改过旧的 `config.json`，把改动抄到新的里。）
+（如果你改过旧的 `config.json`，把改动抄到新的里；新的 `config.json` 里要填 `gdrive.folderId`，见第三节。）
+`~/Presenter/rclone` 和 rclone 的登录设置也都不受影响。
 
 **换上新版本后一定要先手动运行一次**（彩排即可），系统会再问一次能否访问“下载”文件夹，点“允许”；
 否则周日自动启动时会卡在这个询问上。不小心点了“不允许”：系统设置 › 隐私与安全性 › 文件和文件夹 › Presenter，打开“下载文件夹”。
 
-## 三、每周要做的
+## 三、PDF 从哪里来：Google Drive 自动下载
 
-把两个 PDF 下载/放到 **“下载”文件夹**（`~/Downloads`），文件名：
+### 每周要做的
 
-- pdf1：英文单词（首字母大写，其余小写）+ `-` + 日期，例如 `Sunday-20261025.pdf`、`Bible-20261025.pdf`
-  （`SundaySchool-20261025.pdf` 这种中间有大写的**不符合**规则）
-- pdf2：只有日期，例如 `20261025.pdf`
+只要在 Google Drive 那个文件夹里准备好两个 **Google Slides**，标题：
+- pdf1：英文单词（首字母大写，其余小写）+ `-` + 日期，例如 `Sunday-20261025`、`Bible-20261025`
+  （`SundaySchool-20261025` 这种中间有大写的**不符合**规则）
+- pdf2：只有日期，例如 `20261025`
 
-注意：浏览器重复下载同名文件会变成 `20261025 (1).pdf`，**这种不会被使用**。
-Presenter 会把“含今天日期但不符合规则”的 PDF 列在状态提示和菜单里提醒你。pdf1 有多个文件符合时用最新的那个。
+周日 Presenter 启动时会自动把它们导出成 `Sunday-20261025.pdf`、`20261025.pdf`，存进“下载”文件夹。不用再手动下载、改名。
 
-到时间就会自动启动、自动切换、12:15 自动退出。启动时内建屏上方会弹出几秒状态提示，确认：
-- pdf1、pdf2 都是 ✅
+**什么时候下载：**
+- 启动时下载一次（云端没改过、“下载”里也已经有这个文件时会跳过）。
+- 每个 PDF 开始前 4 分钟再检查一次（pdf2 是 10:26）：云端改过才重新下载，礼拜前临时改的 Slides 也能用上最新版。
+- 菜单栏图标 › **从 Google Drive 重新下载**：随时手动再取一次。正在显示的 PDF 会换成新版，停在原来那一页。
+- 到点时还在下载：先显示前一个画面（欢迎页 / “敬拜马上开始!”），下载好立刻显示，最多等 1 分钟。
+
+**取不到时：** 没联网、云端没找到今天的 Slides、Google 出错……都会自动重试；仍然不行就用“下载”里已有的同名 PDF，菜单栏标 ⚠️，状态提示写明原因。
+所以想保险的话，周六手动放一份 PDF 到“下载”，就是备份。
+
+启动时内建屏上方会弹出几秒状态提示，下载完成后再弹一次，确认：
+- Google Drive pdf1、pdf2 都是 ✅
 - 投影屏 ✅
 - 每月第一个星期天：实时翻译 ✅
+
+注意：手动下载的 PDF，浏览器重复下载同名文件会变成 `20261025 (1).pdf`，**这种不会被使用**。
+Presenter 会把“含今天日期但不符合规则”的 PDF 列在状态提示和菜单里提醒你。
+
+### 一次性设置（已经做过 rclone 授权的话，只需要第 3、4 步）
+
+1. **rclone 放在 Presenter 文件夹里**：`~/Presenter/rclone`（Presenter 会自动找到它）。第一次运行被系统拦时：`xattr -d com.apple.quarantine ~/Presenter/rclone`。
+2. **授权 Google 账号**：`~/Presenter/rclone config`，远程名字用 `gdrive`，scope 选 `drive.readonly`，填自己建的 client_id / client_secret。
+   Google Cloud 里的应用要设为 **“正式版”（In production）**，否则授权 7 天后失效。
+3. **填文件夹 ID**：`config.json` 里 `"gdrive"` 的 `"folderId"`，填 Drive 文件夹网址里 `folders/` 后面那一串。
+4. **测试**（周六晚上，按明天的日期下载）：
+   ```bash
+   killall Presenter; open ~/Presenter/Presenter.app --args --test --date 20261115
+   ```
+   状态提示里 Google Drive pdf1、pdf2 应该是 ✅，“下载”里出现两个 PDF。
+
+**设置项**（`config.json` 的 `gdrive`）：`enabled`（false = 不下载）、`folderId`、`remote`（rclone 里的名字）、`rclone`（rclone 的位置，留空自动找）、
+`recheckBeforeMinutes`（开始前几分钟再检查，0 = 不检查）、`waitSeconds`（到点时最多等几秒）。下载到 `pdfFolder`（默认“下载”）。
+
+**授权失效时**（很少见：半年没用过、在 Google 账号里撤销了、应用没设成正式版）：状态里会显示连接 Google Drive 失败，运行一次
+`~/Presenter/rclone config reconnect gdrive:` 重新登录即可。撤销授权：Google 账号 › 安全 › 第三方连接。
 
 菜单栏图标随时显示状态：`⏱9:10`（等待）→ `👋欢迎页` → `📄3/12`（第 3 页 / 共 12 页）→ `🕐时钟` → `⏳1:23` → `📄1/20💬`（💬 = 正在显示实时翻译）。
 延长时会显示到几点，如 `📄12/12→10:20`。图标前出现 **⚠️** 表示有问题，点开菜单看原因。
@@ -116,7 +148,10 @@ Presenter 会把“含今天日期但不符合规则”的 PDF 列在状态提�
   （浅色字会自动加黑色描边，深色字自动加白色描边）
 - 不叠加、改成把 PDF 缩到上方 4/5：`"overlay": false`
 
-## 六、每周日 9:09 自动启动（crontab）
+## 六、每周日自动启动（crontab）
+
+建议改成 **9:05** 启动，给 Google Drive 下载多留几分钟：`bash autostart.sh on 09:05`
+
 
 在 Air 的终端运行：
 
@@ -149,7 +184,8 @@ killall Presenter; cd ~/Presenter && open Presenter.app --args --test
 - `--caption`：不管哪天都显示实时翻译（试字幕条用；测试模式不看 10:40，pdf2 一开始就显示）；`--nocaption`：不显示
 - `--countdown 90`：倒计时用 90 秒；`--pdftime 60`：每个 PDF 显示 60 秒（方便试翻页、试延长）
 - `--at 10:16:50`：按真实时间表运行，但假装现在是 10:16:50（试 10:17 的提醒和延长；`--at 10:39:30 --caption` 试 10:40 字幕条出现）
-- `--date 20261101`：按某天的日期找 PDF
+- `--date 20261101`：按某天的日期找 PDF（也按这个日期从 Google Drive 下载，周六晚上试明天的文件很方便）
+- `--nogdrive`：这次不从 Google Drive 下载，只用“下载”里已有的文件
 
 例：试字幕条 2 分钟 —— `killall Presenter; open Presenter.app --args --test --caption --pdftime 120`
 
@@ -209,5 +245,7 @@ macOS 15 起不允许只用 Option（⌥）或 Option+Shift 的全局快捷键�
 | `images/` | 放 `LogoNew.png` |
 | `pdf/sample.pdf` | 仅测试模式使用 |
 | `autostart.sh` | 用 crontab 设置/取消自动启动 |
+| `rclone` | 从 Google Drive 下载用的工具（自己放进来） |
+| `gdrive-state.json` | 记录上次从 Google Drive 下载的版本（运行后生成，删掉也没关系） |
 | `presenter.log`、`cron.log` | 运行日志、自动启动记录（运行后生成） |
 | `caption-dump-*` | “保存网页结构和截图”生成的文件（调整实时翻译用） |

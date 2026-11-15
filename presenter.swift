@@ -138,7 +138,7 @@ let defaultEventSpecs: [EventSpec] = [
 ]
 
 let defaultPDFPatterns: [String: String] = [
-    "pdf1": "^[ A-Z][a-z]+-{date}\\.pdf$",
+    "pdf1": "^[A-Z][a-z]+-{date}\\.pdf$",
     "pdf2": "^{date}\\.pdf$",
 ]
 
@@ -199,6 +199,7 @@ struct PresenterConfig {
     var warnSeconds: Double = 60
     var warnFor: [String]?              // nil = 所有 PDF
     var caption = CaptionConfig()
+    var gdrive = GDriveConfig()
 }
 
 enum Scene: Equatable {
@@ -293,6 +294,212 @@ func scanPDFFolder(_ folder: URL, date: String, rules: [String: NSRegularExpress
     for (k, v) in best { r.matches[k] = v.url }
     r.unused.sort()
     return r
+}
+
+// MARK: - Google Drive（用 rclone 把当天的 Google Slides 导出成 PDF，存到 PDF 文件夹）
+
+struct GDriveConfig {
+    var enabled = false
+    var rclone = ""                     // 空 = 自动找（Presenter 文件夹里的 rclone 优先）
+    var remote = "gdrive"               // rclone config 里起的名字
+    var folderId = ""                   // Google Drive 文件夹网址里 folders/ 后面那一串
+    var recheckBeforeMinutes: Double = 4
+    var waitSeconds: Double = 60
+}
+
+struct GDriveRecord: Codable {
+    var name: String
+    var modTime: String
+    var downloaded: Date
+}
+
+struct GDriveJob {
+    let exe: URL
+    let remote: String
+    let folderId: String
+    let keys: [String]
+    let rules: [String: NSRegularExpression]
+    let dest: URL
+    let known: [String: GDriveRecord]
+    let force: Bool
+}
+
+struct GDriveOutcome {
+    let key: String
+    let ok: Bool
+    let downloaded: Bool
+    let record: GDriveRecord?
+    let message: String
+}
+
+struct ProcResult {
+    let status: Int32
+    let out: Data
+    let err: String
+    let timedOut: Bool
+
+    var errorSummary: String {
+        if timedOut { return "超时" }
+        let lines = err.split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && !$0.contains("Dangling shortcut") }
+        if let last = lines.last { return String(last.prefix(200)) }
+        return "rclone 退出码 \(status)"
+    }
+}
+
+/// 运行一个命令（在后台线程调用）。输出写到临时文件，避免管道写满卡住
+func runProcess(_ exe: URL, _ args: [String], timeout: TimeInterval) -> ProcResult {
+    let fm = FileManager.default
+    let tmp = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+    let outURL = tmp.appendingPathComponent("presenter-\(UUID().uuidString).out")
+    let errURL = tmp.appendingPathComponent("presenter-\(UUID().uuidString).err")
+    fm.createFile(atPath: outURL.path, contents: nil)
+    fm.createFile(atPath: errURL.path, contents: nil)
+    defer {
+        try? fm.removeItem(at: outURL)
+        try? fm.removeItem(at: errURL)
+    }
+    guard let outH = try? FileHandle(forWritingTo: outURL), let errH = try? FileHandle(forWritingTo: errURL) else {
+        return ProcResult(status: -1, out: Data(), err: "无法创建临时文件", timedOut: false)
+    }
+    let p = Process()
+    p.executableURL = exe
+    p.arguments = args
+    p.standardInput = FileHandle.nullDevice
+    p.standardOutput = outH
+    p.standardError = errH
+    do {
+        try p.run()
+    } catch {
+        outH.closeFile()
+        errH.closeFile()
+        return ProcResult(status: -1, out: Data(), err: "无法运行 \(exe.path)：\(error.localizedDescription)", timedOut: false)
+    }
+    let deadline = Date().addingTimeInterval(timeout)
+    var timedOut = false
+    while p.isRunning {
+        if Date() > deadline {
+            timedOut = true
+            p.terminate()
+            break
+        }
+        Thread.sleep(forTimeInterval: 0.1)
+    }
+    p.waitUntilExit()
+    outH.closeFile()
+    errH.closeFile()
+    let out = (try? Data(contentsOf: outURL)) ?? Data()
+    let err = (try? String(contentsOf: errURL, encoding: .utf8)) ?? ""
+    return ProcResult(status: p.terminationStatus, out: out, err: err, timedOut: timedOut)
+}
+
+/// rclone 的时间（如 2026-11-14T22:31:05.123456789-05:00）→ Date（去掉小数部分再解析）
+func parseRcloneTime(_ s: String) -> Date? {
+    let cleaned = s.replacingOccurrences(of: "\\.[0-9]+", with: "", options: .regularExpression)
+    let f = ISO8601DateFormatter()
+    f.formatOptions = [.withInternetDateTime]
+    return f.date(from: cleaned)
+}
+
+func isPDFFile(_ url: URL) -> Bool {
+    guard let h = try? FileHandle(forReadingFrom: url) else { return false }
+    defer { h.closeFile() }
+    let head = h.readData(ofLength: 5)
+    return head.count == 5 && String(data: head, encoding: .ascii) == "%PDF-"
+}
+
+/// 在 Google Drive 文件夹里找今天的 Slides，导出成 PDF 下载（在后台线程运行）
+func runGDriveJob(_ job: GDriveJob) -> [GDriveOutcome] {
+    let common = ["--drive-root-folder-id", job.folderId, "--drive-export-formats", "pdf"]
+    var entries: [[String: Any]] = []
+    var listErr: String?
+    for attempt in 1...3 {
+        let r = runProcess(job.exe, ["lsjson", job.remote + ":", "--files-only"] + common, timeout: 60)
+        if r.status == 0, !r.timedOut,
+           let arr = (try? JSONSerialization.jsonObject(with: r.out, options: [])) as? [[String: Any]] {
+            entries = arr
+            listErr = nil
+            break
+        }
+        listErr = r.errorSummary
+        writeLog("⚠️ Google Drive 列文件失败（第 \(attempt) 次）：\(r.errorSummary)")
+        if attempt < 3 { Thread.sleep(forTimeInterval: 10) }
+    }
+    if let e = listErr {
+        return job.keys.map {
+            GDriveOutcome(key: $0, ok: false, downloaded: false, record: nil, message: "⚠️ 无法连接 Google Drive：\(e)")
+        }
+    }
+    let fm = FileManager.default
+    let tmpDir = job.dest.appendingPathComponent(".presenter-download", isDirectory: true)
+    var outcomes: [GDriveOutcome] = []
+    for key in job.keys {
+        guard let re = job.rules[key] else { continue }
+        var bestName = ""
+        var bestMod = ""
+        var bestDate = Date.distantPast
+        var count = 0
+        for e in entries {
+            guard let name = e["Name"] as? String else { continue }
+            let range = NSRange(location: 0, length: (name as NSString).length)
+            guard re.firstMatch(in: name, options: [], range: range) != nil else { continue }
+            count += 1
+            let mod = (e["ModTime"] as? String) ?? ""
+            let d = parseRcloneTime(mod) ?? Date.distantPast
+            if bestName.isEmpty || d > bestDate {
+                bestName = name
+                bestMod = mod
+                bestDate = d
+            }
+        }
+        if bestName.isEmpty {
+            outcomes.append(GDriveOutcome(key: key, ok: false, downloaded: false, record: nil,
+                                          message: "⚠️ 云端文件夹里没有今天的文件"))
+            continue
+        }
+        let target = job.dest.appendingPathComponent(bestName)
+        if !job.force, let k = job.known[key], k.name == bestName, k.modTime == bestMod, fm.fileExists(atPath: target.path) {
+            outcomes.append(GDriveOutcome(key: key, ok: true, downloaded: false, record: k,
+                                          message: "✅ 已是最新：\(bestName)"))
+            continue
+        }
+        try? fm.createDirectory(at: tmpDir, withIntermediateDirectories: true, attributes: nil)
+        let tmpFile = tmpDir.appendingPathComponent(bestName)
+        var err = ""
+        var done = false
+        for attempt in 1...2 {
+            try? fm.removeItem(at: tmpFile)
+            let r = runProcess(job.exe, ["copyto", job.remote + ":" + bestName, tmpFile.path] + common, timeout: 240)
+            if r.status == 0, !r.timedOut, isPDFFile(tmpFile) {
+                done = true
+                break
+            }
+            err = (r.status == 0 && !r.timedOut) ? "下载的文件不是有效的 PDF" : r.errorSummary
+            writeLog("⚠️ 下载 \(bestName) 失败（第 \(attempt) 次）：\(err)")
+            if attempt < 2 { Thread.sleep(forTimeInterval: 10) }
+        }
+        if !done {
+            outcomes.append(GDriveOutcome(key: key, ok: false, downloaded: false, record: nil, message: "⚠️ 下载失败：\(err)"))
+            continue
+        }
+        do {
+            if fm.fileExists(atPath: target.path) {
+                _ = try fm.replaceItemAt(target, withItemAt: tmpFile)
+            } else {
+                try fm.moveItem(at: tmpFile, to: target)
+            }
+        } catch {
+            outcomes.append(GDriveOutcome(key: key, ok: false, downloaded: false, record: nil,
+                                          message: "⚠️ 无法存到 PDF 文件夹：\(error.localizedDescription)"))
+            continue
+        }
+        var msg = "✅ 已下载：\(bestName)"
+        if count > 1 { msg += "（云端有 \(count) 个符合，用最新的）" }
+        let rec = GDriveRecord(name: bestName, modTime: bestMod, downloaded: Date())
+        outcomes.append(GDriveOutcome(key: key, ok: true, downloaded: true, record: rec, message: msg))
+    }
+    return outcomes
 }
 
 struct CachedDoc {
@@ -1091,6 +1298,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
     let warnHUD = HUD(background: NSColor(calibratedRed: 0.78, green: 0.33, blue: 0.0, alpha: 0.96), fontSize: 17)
     var launchHUDShown = false
 
+    // Google Drive
+    let gdriveQueue = DispatchQueue(label: "local.presenter.gdrive")
+    var noGDrive = false
+    var gdriveExe: URL?
+    var gdriveReady = false
+    var gdriveSetupProblem: String?
+    var gdriveBusyKeys = Set<String>()
+    var gdrivePending: (keys: Set<String>, force: Bool, reason: String, announce: Bool)?
+    var gdriveStatus: [String: String] = [:]
+    var gdriveRecords: [String: GDriveRecord] = [:]
+    var gdriveWaitUntil: [String: Date] = [:]
+    var gdriveRechecked = Set<Int>()
+
     var pdfFolderURL: URL {
         return expandPath(cfg.pdfFolder, base: baseDir)
     }
@@ -1151,6 +1371,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
 
         buildTimeline(appNow())
         lateLaunch = !testMode && sceneForEvent(autoIndex(appNow())) == .quit
+        setupGDrive()
+        if gdriveReady && !lateLaunch {
+            let lead = cfg.gdrive.recheckBeforeMinutes * 60 + 60
+            for (j, e) in timeline.enumerated() where isPDFShow(e.show) && e.at.timeIntervalSince(appNow()) <= lead {
+                gdriveRechecked.insert(j)
+            }
+            startGDriveFetch(pdfKeys(), force: false, reason: "启动时下载今天的 PDF", announce: true)
+        }
         logSummary()
         periodicChecks()
 
@@ -1201,6 +1429,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
                 dirArg = value()
             case "--caption":
                 captionForced = true
+            case "--nogdrive":
+                noGDrive = true
             case "--nocaption":
                 captionForced = false
             case "--date":
@@ -1262,6 +1492,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
             if let v = e["minutes"] as? Double, v > 0 { cfg.extendMinutes = v }
             if let v = e["warnSeconds"] as? Double, v >= 0 { cfg.warnSeconds = v }
             if let v = e["warnFor"] as? [String] { cfg.warnFor = v }
+        }
+        if let g = obj["gdrive"] as? [String: Any] {
+            if let v = g["enabled"] as? Bool { cfg.gdrive.enabled = v }
+            if let v = g["rclone"] as? String { cfg.gdrive.rclone = v.trimmingCharacters(in: .whitespaces) }
+            if let v = g["remote"] as? String, !v.isEmpty {
+                cfg.gdrive.remote = v.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ":", with: "")
+            }
+            if let v = g["folderId"] as? String { cfg.gdrive.folderId = v.trimmingCharacters(in: .whitespaces) }
+            if let v = g["recheckBeforeMinutes"] as? Double, v >= 0 { cfg.gdrive.recheckBeforeMinutes = v }
+            if let v = g["waitSeconds"] as? Double, v >= 0 { cfg.gdrive.waitSeconds = v }
         }
         if let c = obj["caption"] as? [String: Any] {
             if let v = c["url"] as? String { cfg.caption.url = v.trimmingCharacters(in: .whitespaces) }
@@ -1845,11 +2085,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         updateCaptionVisibility(now)
 
         // PDF 时间到了但文件缺失/打不开：每 2 秒重试
-        if case .pdf(let key) = currentScene, pdfShownKey == nil, tickCount % 40 == 0 {
+        if case .pdf(let key) = currentScene, pdfShownKey == nil, tickCount % 40 == 0, !waitingForDownload(key) {
             if showPDF(key) { writeLog("\(key)：文件已找到，开始显示") }
         }
 
         if tickCount % 20 == 0 {
+            gdriveTick(now)
             preloadUpcoming(now)
             captionTick(now)
         }
@@ -1879,7 +2120,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
             showStage("countdown", target: t)
         case .pdf(let key):
             if pdfShownKey != key { closePDF() }
-            if !showPDF(key, restore: manual != nil) {
+            if gdriveBusyKeys.contains(key) && cfg.gdrive.waitSeconds > 0 {
+                // 正在从 Google Drive 下载最新版：先显示前一个画面，下载完马上显示（最多等 waitSeconds 秒）
+                gdriveWaitUntil[key] = appNow().addingTimeInterval(cfg.gdrive.waitSeconds)
+                writeLog("\(key)：正在从 Google Drive 下载，最多等 \(Int(cfg.gdrive.waitSeconds)) 秒")
+                showFallback(forIndex: index)
+            } else if !showPDF(key, restore: manual != nil) {
                 writeLog("⚠️ \(key)：找不到或打不开 PDF，先显示前一个画面，每 2 秒重试")
                 showFallback(forIndex: index)
             }
@@ -1993,7 +2239,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
             writeLog("注意：含今天日期但不符合规则（不会使用）：" + r.unused.joined(separator: "、"))
         }
         // 正处在 PDF 时段但还没显示（例如程序晚开、文件刚放进来）：马上再试
-        if case .pdf(let key) = currentScene, pdfShownKey == nil, showPDF(key) {
+        if case .pdf(let key) = currentScene, pdfShownKey == nil, !waitingForDownload(key), showPDF(key) {
             writeLog("\(key)：文件已找到，开始显示")
         }
         if !launchHUDShown { showLaunchHUD() }
@@ -2079,6 +2325,123 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         if let sv = pdfView.documentView?.enclosingScrollView {
             sv.hasVerticalScroller = false
             sv.hasHorizontalScroller = false
+        }
+    }
+
+    // MARK: Google Drive
+
+    func setupGDrive() {
+        let g = cfg.gdrive
+        guard g.enabled, !noGDrive else { return }
+        if g.folderId.isEmpty {
+            let msg = "config.json 里 gdrive.folderId 还没填（Google Drive 文件夹 ID）"
+            gdriveSetupProblem = msg
+            problems.append(msg)
+            return
+        }
+        var candidates: [URL] = []
+        if !g.rclone.isEmpty { candidates.append(expandPath(g.rclone, base: baseDir)) }
+        candidates.append(baseDir.appendingPathComponent("rclone"))
+        candidates.append(baseDir.appendingPathComponent("bin/rclone"))
+        candidates.append(URL(fileURLWithPath: "/opt/homebrew/bin/rclone"))
+        candidates.append(URL(fileURLWithPath: "/usr/local/bin/rclone"))
+        candidates.append(URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("bin/rclone"))
+        guard let exe = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0.path) }) else {
+            let msg = "找不到 rclone（请把 rclone 放在 Presenter 文件夹里）"
+            gdriveSetupProblem = msg
+            problems.append(msg)
+            return
+        }
+        gdriveExe = exe
+        gdriveReady = true
+        loadGDriveState()
+    }
+
+    var gdriveStateURL: URL {
+        return baseDir.appendingPathComponent("gdrive-state.json")
+    }
+
+    func loadGDriveState() {
+        guard let d = try? Data(contentsOf: gdriveStateURL) else { return }
+        let dec = JSONDecoder()
+        dec.dateDecodingStrategy = .iso8601
+        if let r = try? dec.decode([String: GDriveRecord].self, from: d) { gdriveRecords = r }
+    }
+
+    func saveGDriveState() {
+        let enc = JSONEncoder()
+        enc.dateEncodingStrategy = .iso8601
+        enc.outputFormatting = [.prettyPrinted]
+        if let d = try? enc.encode(gdriveRecords) { try? d.write(to: gdriveStateURL, options: .atomic) }
+    }
+
+    /// 开始从 Google Drive 下载（正在下载时排队，等这一轮完成再做）
+    func startGDriveFetch(_ keys: [String], force: Bool, reason: String, announce: Bool) {
+        guard gdriveReady, let exe = gdriveExe else { return }
+        let want = keys.filter { rules[$0] != nil }
+        if want.isEmpty { return }
+        if !gdriveBusyKeys.isEmpty {
+            var p = gdrivePending ?? (keys: Set<String>(), force: false, reason: reason, announce: false)
+            p.keys.formUnion(want)
+            p.force = p.force || force
+            p.announce = p.announce || announce
+            gdrivePending = p
+            return
+        }
+        gdriveBusyKeys = Set(want)
+        for k in want { gdriveStatus[k] = "下载中…" }
+        writeLog("Google Drive：\(reason)（\(want.joined(separator: "、"))）")
+        let job = GDriveJob(exe: exe, remote: cfg.gdrive.remote, folderId: cfg.gdrive.folderId, keys: want,
+                            rules: rules, dest: pdfFolderURL, known: gdriveRecords, force: force)
+        gdriveQueue.async {
+            let outcomes = runGDriveJob(job)
+            DispatchQueue.main.async {
+                self.gdriveFinished(outcomes, announce: announce)
+            }
+        }
+    }
+
+    func gdriveFinished(_ outcomes: [GDriveOutcome], announce: Bool) {
+        gdriveBusyKeys.removeAll()
+        var changed: [String] = []
+        var problem = false
+        for o in outcomes {
+            gdriveStatus[o.key] = o.downloaded ? "\(o.message)（\(hms(Date()))）" : o.message
+            if let r = o.record { gdriveRecords[o.key] = r }
+            if o.downloaded { changed.append(o.key) }
+            if !o.ok { problem = true }
+            writeLog("Google Drive \(o.key)：\(o.message)")
+        }
+        saveGDriveState()
+        rescanNow()
+        // 正在显示的 PDF 有了新版本（手动重新下载时）：重新载入，停在原来那一页
+        if let k = pdfShownKey, changed.contains(k) { reloadShownPDFKeepingPage() }
+        if announce || problem || !changed.isEmpty {
+            let title = problem ? "Google Drive：有文件没取到（会用 PDF 文件夹里已有的文件）" : "Google Drive：PDF 已准备好"
+            showHUD(title: title, note: nil, seconds: problem ? 10 : 6)
+        }
+        if let p = gdrivePending {
+            gdrivePending = nil
+            startGDriveFetch(Array(p.keys), force: p.force, reason: p.reason, announce: p.announce)
+        }
+    }
+
+    /// 开场时正在下载这个 PDF，而且还没等够 waitSeconds
+    func waitingForDownload(_ key: String) -> Bool {
+        guard gdriveBusyKeys.contains(key), let u = gdriveWaitUntil[key] else { return false }
+        return appNow() < u
+    }
+
+    /// 每个 PDF 开始前几分钟，再检查一次云端有没有更新（有更新才下载）
+    func gdriveTick(_ now: Date) {
+        guard gdriveReady, !testMode, cfg.gdrive.recheckBeforeMinutes > 0 else { return }
+        let lead = cfg.gdrive.recheckBeforeMinutes * 60
+        for (j, e) in timeline.enumerated() where isPDFShow(e.show) && !gdriveRechecked.contains(j) {
+            let dt = e.at.timeIntervalSince(now)
+            if dt <= lead {
+                gdriveRechecked.insert(j)
+                if dt > 0 { startGDriveFetch([e.show], force: false, reason: "\(e.show) 开始前再检查一次", announce: false) }
+            }
         }
     }
 
@@ -2439,6 +2802,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
 
     var hasWarning: Bool {
         if hotkeyProblems > 0 || !problems.isEmpty || noScreenWarn { return true }
+        if gdriveStatus.values.contains(where: { $0.hasPrefix("⚠️") }) { return true }
         if scan.checked && !scan.readable { return true }
         return upcomingPDFMissing()
     }
@@ -2537,6 +2901,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         lines.append("当前：\(currentScene.label)" + (manual == nil ? "" : "（手动）"))
         if scan.checked && !scan.readable { lines.append(folderStatus()) }
         for key in pdfKeys() { lines.append("\(key)：\(pdfStatus(key))") }
+        if gdriveReady {
+            for key in pdfKeys() { lines.append("Google Drive \(key)：\(gdriveStatus[key] ?? "—")") }
+        }
         if !scan.unused.isEmpty {
             lines.append("注意：这些 PDF 含今天日期但不符合规则，不会使用：" + scan.unused.prefix(3).joined(separator: "、"))
         }
@@ -2593,6 +2960,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         addInfo(menu, "PDF 文件夹：\(pdfFolderURL.path)")
         if scan.checked && !scan.readable { addInfo(menu, folderStatus()) }
         for key in pdfKeys() { addInfo(menu, "\(key)：\(pdfStatus(key))") }
+        if cfg.gdrive.enabled && !noGDrive {
+            if gdriveReady {
+                addInfo(menu, "Google Drive 文件夹：\(cfg.gdrive.folderId)")
+                for key in pdfKeys() { addInfo(menu, "　\(key)：\(gdriveStatus[key] ?? "—")") }
+                addAction(menu, nil, gdriveBusyKeys.isEmpty ? "从 Google Drive 重新下载" : "正在从 Google Drive 下载…（点击可排队再下载一次）",
+                          #selector(menuGDriveFetch))
+                addAction(menu, nil, "在浏览器打开 Google Drive 文件夹", #selector(menuGDriveOpen))
+            } else {
+                addInfo(menu, "Google Drive：⚠️ \(gdriveSetupProblem ?? "没有启用")")
+            }
+        }
         if !scan.unused.isEmpty {
             addInfo(menu, "注意：含今天日期但不符合规则（不会使用）：")
             for name in scan.unused.prefix(6) { addInfo(menu, "　　\(name)") }
@@ -2700,7 +3078,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
     @objc func menuCaptionDump() { dumpCaptionPage() }
     @objc func menuReload() {
         rescanNow()
-        guard let k = pdfShownKey else { tick(); return }
+        if pdfShownKey == nil { tick() } else { reloadShownPDFKeepingPage() }
+    }
+    @objc func menuGDriveFetch() {
+        startGDriveFetch(pdfKeys(), force: true, reason: "手动重新下载", announce: true)
+    }
+    @objc func menuGDriveOpen() {
+        if let u = URL(string: "https://drive.google.com/drive/folders/\(cfg.gdrive.folderId)") { NSWorkspace.shared.open(u) }
+    }
+
+    /// 重新载入正在显示的 PDF（文件更新了），停在原来那一页
+    func reloadShownPDFKeepingPage() {
+        guard let k = pdfShownKey else { return }
         var index = 0
         if let d = pdfView.document, let p = pdfView.currentPage { index = d.index(for: p) }
         docCache[k] = nil
@@ -2750,6 +3139,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         for key in pdfKeys() { writeLog("\(key) 规则：\(rulePatterns[key] ?? "（无效）")") }
         writeLog("延长：每次 +\(durationText(extendStep))；PDF 结束前 \(durationText(warnLead)) 提醒")
         writeLog("实时翻译：\(captionDayText())；网址 \(cfg.caption.url)；显示方式 \(captionMode)")
+        if gdriveReady, let exe = gdriveExe {
+            writeLog("Google Drive：rclone = \(exe.path)；远程 \(cfg.gdrive.remote)；文件夹 \(cfg.gdrive.folderId)；下载到 \(pdfFolderURL.path)")
+        }
         for line in hotkeyReport { writeLog("快捷键 " + line) }
         writeLog(obsSummary)
         for p in problems { writeLog("⚠️ " + p) }
