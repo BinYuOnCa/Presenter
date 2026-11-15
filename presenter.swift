@@ -1268,6 +1268,7 @@ protocol LiveRecognizer: AnyObject {
     func start(language: String, target: String, device: String, channel: Int)
     func stop()
     func clearIfIdle(after seconds: TimeInterval)
+    func inputNames() -> [String]
 }
 
 #if compiler(>=6.2)
@@ -1364,6 +1365,10 @@ final class LiveCaptionEngine: LiveRecognizer {
         stop()
         retryAt = Date().addingTimeInterval(retryAfter)
         setStatus("⚠️ \(message)")
+    }
+
+    func inputNames() -> [String] {
+        return Self.inputDevices().map { $0.name }
     }
 
     func clearIfIdle(after seconds: TimeInterval) {
@@ -1770,6 +1775,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
     var captionActivity = Date()
     var captionSource = "kaleo"         // kaleo | apple
     var captionSourceArg: String?       // --apple / --kaleo
+    var inputArg: String?               // --input "设备名"（"" = 系统默认输入）
+    var channelArg: Int?                // --channel 0/1/2
+    var langArg: String?                // --lang zh / en
     var recognizer: LiveRecognizer?
     var appleLanguage = "zh-CN"
     var appleDisplay = "both"
@@ -1845,6 +1853,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         computeCaptionDay()
         captionMode = cfg.caption.mode
         captionSource = captionSourceArg ?? cfg.caption.source
+        if let v = inputArg { cfg.caption.apple.inputDevice = v.trimmingCharacters(in: .whitespaces) }
+        if let v = channelArg { cfg.caption.apple.channel = v }
+        if let v = langArg { cfg.caption.apple.language = v }
         appleLanguage = cfg.caption.apple.language
         appleDisplay = cfg.caption.apple.display
         setupRecognizer()
@@ -1928,6 +1939,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
                 if let v = value() { atArg = parseHMS(v) }
             case "--dir":
                 dirArg = value()
+            case "--input":
+                inputArg = value() ?? ""
+            case "--channel":
+                if let v = value(), let n = Int(v), n >= 0 { channelArg = n }
+            case "--lang":
+                if let v = value() { langArg = v.lowercased().hasPrefix("en") ? "en-US" : "zh-CN" }
             case "--apple":
                 captionSourceArg = "apple"
             case "--kaleo":
@@ -3681,7 +3698,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         addAction(cm, nil, "显示：原文 + 译文", #selector(menuAppleBoth), on: appleDisplay == "both")
         addAction(cm, nil, "显示：只显示译文", #selector(menuAppleTranslation), on: appleDisplay == "translation")
         addAction(cm, nil, "显示：只显示原文", #selector(menuAppleOriginal), on: appleDisplay == "original")
-        addInfo(cm, "音频输入：\(cfg.caption.apple.inputDevice.isEmpty ? "系统默认输入" : cfg.caption.apple.inputDevice)")
+        addInfo(cm, "音频输入：\(cfg.caption.apple.inputDevice.isEmpty ? "系统默认输入" : cfg.caption.apple.inputDevice)"
+                + (cfg.caption.apple.channel > 0 ? "，第 \(cfg.caption.apple.channel) 路" : ""))
+        if let names = recognizer?.inputNames(), !names.isEmpty {
+            addInfo(cm, "这台 Mac 的音频输入：" + names.joined(separator: "、"))
+        }
         cm.addItem(NSMenuItem.separator())
         // Kaleo
         addInfo(cm, "Kaleo 网页：" + (sourceRequested ? sourceState : "未载入（需要时自动载入）"))
@@ -3808,6 +3829,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         writeLog("延长：每次 +\(durationText(extendStep))；PDF 结束前 \(durationText(warnLead)) 提醒")
         writeLog("实时翻译：\(captionDayText())；网址 \(cfg.caption.url)；显示方式 \(captionMode)")
         writeLog("字幕来源：\(captionSourceText())；本机识别：\(recognizer == nil ? appleStatus : "可用")；音频输入 \(cfg.caption.apple.inputDevice)")
+        if let names = recognizer?.inputNames() { writeLog("这台 Mac 的音频输入：" + names.joined(separator: "、")) }
         if gdriveReady, let exe = gdriveExe {
             writeLog("Google Drive：rclone = \(exe.path)；远程 \(cfg.gdrive.remote)；文件夹 \(cfg.gdrive.folderId)；下载到 \(pdfFolderURL.path)")
         }

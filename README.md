@@ -218,6 +218,9 @@ killall Presenter; cd ~/Presenter && open Presenter.app --args --test
 其他参数：
 - `--caption`：不管哪天都显示实时翻译（试字幕条用；测试模式不看 10:40，pdf2 一开始就显示）；`--nocaption`：不显示
 - `--apple` / `--kaleo`：这次用本机识别 / Kaleo 作为字幕来源
+- `--input "MacBook"`：这次本机识别用哪个音频输入（名字包含即可；`--input ""` = 系统默认输入）。现有输入的名字在菜单栏图标 › 实时翻译 里能看到
+- `--channel 1`：只用第 1 路输入（0 = 混合）；`--lang en`：这次识别英语（`zh` = 普通话）
+- 例：用 MacBook 自带麦克风试本机识别 —— `open Presenter.app --args --test --apple --input "MacBook" --pdftime 300`，然后按 `⌃⌥T`
 - `--countdown 90`：倒计时用 90 秒；`--pdftime 60`：每个 PDF 显示 60 秒（方便试翻页、试延长）
 - `--at 10:16:50`：按真实时间表运行，但假装现在是 10:16:50（试 10:17 的提醒和延长；`--at 10:39:30 --caption` 试 10:40 字幕条出现）
 - `--date 20261101`：按某天的日期找 PDF（也按这个日期从 Google Drive 下载，周六晚上试明天的文件很方便）

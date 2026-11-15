@@ -24,7 +24,7 @@ SDKMAJOR="${SDKV%%.*}"
 EXTRA=()
 if [ "${SDKMAJOR:-0}" -ge 26 ] 2>/dev/null; then
   # 本机语音识别 + 翻译（macOS 26 的新功能）
-  EXTRA=(-framework AVFoundation -framework CoreAudio -framework AudioToolbox -framework Speech -weak_framework Translation)
+  EXTRA=(-framework AVFoundation -framework CoreAudio -framework AudioToolbox -framework Speech -framework Translation)
   echo "▶ macOS SDK ${SDKV}：包含本机识别 + 翻译"
 else
   echo "⚠️  macOS SDK ${SDKV}（低于 26）：这次编译不包含本机识别功能。要用本机识别，请把 Xcode 更新到 26 以上。"
