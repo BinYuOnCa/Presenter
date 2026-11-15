@@ -159,6 +159,9 @@ let defaultHotkeys: [String: [String]] = [
     "caption": ["ctrl+alt+t"],
     "captionSource": ["ctrl+alt+s"],
     "captionLanguage": ["ctrl+alt+l"],
+    "showOriginal": ["ctrl+alt+o"],
+    "showTranslation": ["ctrl+alt+y"],
+    "showBoth": ["ctrl+alt+a"],
     "pdfNow": ["ctrl+alt+p"],
     "quit": ["ctrl+alt+escape"],
 ]
@@ -170,13 +173,21 @@ func isPDFShow(_ show: String) -> Bool {
     return !stageShows.contains(show)
 }
 
+/// PDF 在菜单和提示里显示的名字（config.json 的 pdfNames）
+var pdfDisplayNames: [String: String] = ["pdf1": "主日学", "pdf2": "敬拜"]
+
+func pdfName(_ key: String) -> String {
+    if let n = pdfDisplayNames[key], !n.isEmpty { return n }
+    return key
+}
+
 func showLabel(_ show: String) -> String {
     switch show {
     case "welcome": return "欢迎页"
     case "clock": return "时钟"
     case "countdown": return "倒计时"
     case "quit": return "退出"
-    default: return show
+    default: return pdfName(show)
     }
 }
 
@@ -243,7 +254,7 @@ enum Scene: Equatable {
         case .welcome: return "欢迎页"
         case .clock: return "时钟"
         case .countdown: return "倒计时"
-        case .pdf(let k): return k
+        case .pdf(let k): return pdfName(k)
         case .quit: return "退出"
         }
     }
@@ -532,6 +543,7 @@ struct CachedDoc {
 
 enum HotAction: String, CaseIterable {
     case next, prev, first, last, black, extend, auto, caption, captionSource, captionLanguage
+    case showOriginal, showTranslation, showBoth
     case pdfNow, welcomeNow, clockNow, countdownNow, quit
 
     var title: String {
@@ -546,6 +558,9 @@ enum HotAction: String, CaseIterable {
         case .caption: return "实时翻译 显示/隐藏"
         case .captionSource: return "字幕来源 Kaleo ↔ 本机识别"
         case .captionLanguage: return "本机识别语言 普通话 ↔ 英语"
+        case .showOriginal: return "本机识别 只显示原文"
+        case .showTranslation: return "本机识别 只显示译文"
+        case .showBoth: return "本机识别 原文 + 译文"
         case .pdfNow: return "立即显示 PDF（当前或下一个）"
         case .welcomeNow: return "立即显示欢迎页"
         case .clockNow: return "立即显示时钟"
@@ -2065,6 +2080,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
             if !pats.isEmpty { cfg.pdfPatterns = pats }
         }
         if let v = obj["screenName"] as? String { cfg.screenName = v }
+        if let names = obj["pdfNames"] as? [String: Any] {
+            for (k, v) in names where !k.hasPrefix("_") {
+                if let n = v as? String { pdfDisplayNames[k] = n.trimmingCharacters(in: .whitespaces) }
+            }
+        }
         if let e = obj["extend"] as? [String: Any] {
             if let v = e["minutes"] as? Double, v > 0 { cfg.extendMinutes = v }
             if let v = e["warnSeconds"] as? Double, v >= 0 { cfg.warnSeconds = v }
@@ -2673,7 +2693,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
 
         // PDF 时间到了但文件缺失/打不开：每 2 秒重试
         if case .pdf(let key) = currentScene, pdfShownKey == nil, tickCount % 40 == 0, !waitingForDownload(key) {
-            if showPDF(key) { writeLog("\(key)：文件已找到，开始显示") }
+            if showPDF(key) { writeLog("\(pdfName(key))：文件已找到，开始显示") }
         }
 
         if tickCount % 20 == 0 {
@@ -2710,10 +2730,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
             if gdriveBusyKeys.contains(key) && cfg.gdrive.waitSeconds > 0 {
                 // 正在从 Google Drive 下载最新版：先显示前一个画面，下载完马上显示（最多等 waitSeconds 秒）
                 gdriveWaitUntil[key] = appNow().addingTimeInterval(cfg.gdrive.waitSeconds)
-                writeLog("\(key)：正在从 Google Drive 下载，最多等 \(Int(cfg.gdrive.waitSeconds)) 秒")
+                writeLog("\(pdfName(key))：正在从 Google Drive 下载，最多等 \(Int(cfg.gdrive.waitSeconds)) 秒")
                 showFallback(forIndex: index)
             } else if !showPDF(key, restore: manual != nil) {
-                writeLog("⚠️ \(key)：找不到或打不开 PDF，先显示前一个画面，每 2 秒重试")
+                writeLog("⚠️ \(pdfName(key))：找不到或打不开 PDF，先显示前一个画面，每 2 秒重试")
                 showFallback(forIndex: index)
             }
         }
@@ -2766,7 +2786,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         let j = autoIndex(end)
         let nextShow = (j >= 0 && j < timeline.count) ? timeline[j].show : "welcome"
         let action = nextShow == "quit" ? "Presenter 将退出" : "切换到\(showLabel(nextShow))"
-        var lines = ["⏰ \(Int(ceil(left))) 秒后（\(hms(end))）关闭 \(key)，\(action)"]
+        var lines = ["⏰ \(Int(ceil(left))) 秒后（\(hms(end))）关闭\(pdfName(key))，\(action)"]
         if let e = hotkeyLabels[.extend] {
             lines.append("需要延长请按 \(e)（每按一次 +\(durationText(extendStep))）；不操作就按时切换")
         } else {
@@ -2817,9 +2837,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         }
         for key in pdfKeys() where old.matches[key] != r.matches[key] || !old.checked {
             if let u = r.matches[key] {
-                writeLog("\(key)：✅ \(u.lastPathComponent)")
+                writeLog("\(pdfName(key))：✅ \(u.lastPathComponent)")
             } else if r.readable {
-                writeLog("\(key)：⚠️ 还没有符合规则的文件（\(rulePatterns[key] ?? "?")）")
+                writeLog("\(pdfName(key))：⚠️ 还没有符合规则的文件（\(rulePatterns[key] ?? "?")）")
             }
         }
         if r.unused != old.unused && !r.unused.isEmpty {
@@ -2827,7 +2847,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         }
         // 正处在 PDF 时段但还没显示（例如程序晚开、文件刚放进来）：马上再试
         if case .pdf(let key) = currentScene, pdfShownKey == nil, !waitingForDownload(key), showPDF(key) {
-            writeLog("\(key)：文件已找到，开始显示")
+            writeLog("\(pdfName(key))：文件已找到，开始显示")
         }
         if !launchHUDShown { showLaunchHUD() }
     }
@@ -2864,7 +2884,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
             return nil
         }
         docCache[key] = CachedDoc(url: url, mod: mod, doc: doc)
-        writeLog("已载入 \(key)：\(url.lastPathComponent)（\(doc.pageCount) 页）")
+        writeLog("已载入\(pdfName(key))：\(url.lastPathComponent)（\(doc.pageCount) 页）")
         return doc
     }
 
@@ -2877,7 +2897,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
             target = max(0, min(lp.index, doc.pageCount - 1))
         }
         if let pg = doc.page(at: target) { pdfView.go(to: pg) }
-        if target > 0 { writeLog("\(key)：回到刚才的第 \(target + 1) 页") }
+        if target > 0 { writeLog("\(pdfName(key))：回到刚才的第 \(target + 1) 页") }
         pdfView.isHidden = false
         pdfShownKey = key
         placePanel()
@@ -2897,7 +2917,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         pdfView.document = nil
         docCache[k] = nil
         pdfShownKey = nil
-        writeLog("关闭 \(k)")
+        writeLog("关闭\(pdfName(k))")
     }
 
     /// 下一项是 PDF 且 2 分钟内开始：提前载入，切换时立刻显示
@@ -2997,7 +3017,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
             if let r = o.record { gdriveRecords[o.key] = r }
             if o.downloaded { changed.append(o.key) }
             if !o.ok { problem = true }
-            writeLog("Google Drive \(o.key)：\(o.message)")
+            writeLog("Google Drive \(pdfName(o.key))：\(o.message)")
         }
         saveGDriveState()
         rescanNow()
@@ -3027,7 +3047,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
             let dt = e.at.timeIntervalSince(now)
             if dt <= lead {
                 gdriveRechecked.insert(j)
-                if dt > 0 { startGDriveFetch([e.show], force: false, reason: "\(e.show) 开始前再检查一次", announce: false) }
+                if dt > 0 { startGDriveFetch([e.show], force: false, reason: "\(pdfName(e.show)) 开始前再检查一次", announce: false) }
             }
         }
     }
@@ -3264,6 +3284,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
 
     func setAppleDisplay(_ d: String) {
         appleDisplay = d
+        let name = d == "original" ? "只显示原文" : (d == "translation" ? "只显示译文" : "原文 + 译文")
+        writeLog("本机识别字幕显示：\(name)")
+        var msg = "字幕显示：\(name)"
+        if captionSource != "apple" { msg += "\n（只对本机识别有效；现在的字幕来源是 Kaleo）" }
+        infoHUD.show(msg, on: builtInScreen(), seconds: 3)
         refreshCaptionDisplay()
     }
 
@@ -3447,6 +3472,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         case .captionSource:
             setCaptionSource(captionSource == "apple" ? "kaleo" : "apple")
             return
+        case .showOriginal, .showTranslation, .showBoth:
+            let mode = action == .showOriginal ? "original" : (action == .showTranslation ? "translation" : "both")
+            setAppleDisplay(mode)
+            return
         case .captionLanguage:
             if captionSource != "apple" {
                 infoHUD.show("现在的字幕来源是 Kaleo；先按 \(hotkeyLabels[.captionSource] ?? "菜单") 切换到本机识别", on: builtInScreen(), seconds: 4)
@@ -3575,6 +3604,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         return "⚠️ 找不到（规则 \(rulePatterns[key] ?? cfg.pdfPatterns[key] ?? "?")）"
     }
 
+    /// 主菜单里的一行 PDF 摘要，例如“pdf1 ✅ · pdf2 ⚠️”
+    func pdfSummary() -> String {
+        if scan.checked && !scan.readable { return "⚠️ 无法读取 PDF 文件夹" }
+        let parts = pdfKeys().map { key -> String in
+            if pdfURL(for: key) != nil { return "\(pdfName(key)) ✅" }
+            if gdriveBusyKeys.contains(key) { return "\(pdfName(key)) 下载中…" }
+            return scan.checked ? "\(pdfName(key)) ⚠️ 缺" : "\(pdfName(key)) 检查中…"
+        }
+        return parts.isEmpty ? "—" : parts.joined(separator: " · ")
+    }
+
     func captionDuringText() -> String {
         var t = cfg.caption.showDuring.map { showLabel($0) }.joined(separator: "、")
         if let f = captionFrom, let e = captionTo {
@@ -3614,9 +3654,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         lines.append("时间表：" + timelineSummary(" · "))
         lines.append("当前：\(currentScene.label)" + (manual == nil ? "" : "（手动）"))
         if scan.checked && !scan.readable { lines.append(folderStatus()) }
-        for key in pdfKeys() { lines.append("\(key)：\(pdfStatus(key))") }
+        for key in pdfKeys() { lines.append("\(pdfName(key))：\(pdfStatus(key))") }
         if gdriveReady {
-            for key in pdfKeys() { lines.append("Google Drive \(key)：\(gdriveStatus[key] ?? "—")") }
+            for key in pdfKeys() { lines.append("Google Drive \(pdfName(key))：\(gdriveStatus[key] ?? "—")") }
         }
         if !scan.unused.isEmpty {
             lines.append("注意：这些 PDF 含今天日期但不符合规则，不会使用：" + scan.unused.prefix(3).joined(separator: "、"))
@@ -3671,24 +3711,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         addInfo(menu, "当前：\(currentScene.label)" + (manual == nil ? "（自动）" : "（手动）"))
         menu.addItem(NSMenuItem.separator())
 
-        addInfo(menu, "PDF 文件夹：\(pdfFolderURL.path)")
-        if scan.checked && !scan.readable { addInfo(menu, folderStatus()) }
-        for key in pdfKeys() { addInfo(menu, "\(key)：\(pdfStatus(key))") }
-        if cfg.gdrive.enabled && !noGDrive {
+        // PDF：主菜单只放一行摘要和“重新下载”，其余放进“PDF 文件”二级菜单
+        addInfo(menu, "PDF：" + pdfSummary())
+        let gdOn = cfg.gdrive.enabled && !noGDrive
+        if gdOn && gdriveReady {
+            addAction(menu, nil, gdriveBusyKeys.isEmpty ? "从 Google Drive 重新下载" : "正在从 Google Drive 下载…（点击可排队再下载一次）",
+                      #selector(menuGDriveFetch))
+        }
+        let pdfItem = NSMenuItem(title: "PDF 文件", action: nil, keyEquivalent: "")
+        let pm = NSMenu()
+        addInfo(pm, "PDF 文件夹：\(pdfFolderURL.path)")
+        if scan.checked && !scan.readable { addInfo(pm, folderStatus()) }
+        for key in pdfKeys() { addInfo(pm, "\(pdfName(key))：\(pdfStatus(key))") }
+        if !scan.unused.isEmpty {
+            addInfo(pm, "注意：含今天日期但不符合规则（不会使用）：")
+            for name in scan.unused.prefix(6) { addInfo(pm, "　　\(name)") }
+        }
+        if gdOn {
+            pm.addItem(NSMenuItem.separator())
             if gdriveReady {
-                addInfo(menu, "Google Drive 文件夹：\(cfg.gdrive.folderId)")
-                for key in pdfKeys() { addInfo(menu, "　\(key)：\(gdriveStatus[key] ?? "—")") }
-                addAction(menu, nil, gdriveBusyKeys.isEmpty ? "从 Google Drive 重新下载" : "正在从 Google Drive 下载…（点击可排队再下载一次）",
-                          #selector(menuGDriveFetch))
-                addAction(menu, nil, "在浏览器打开 Google Drive 文件夹", #selector(menuGDriveOpen))
+                addInfo(pm, "Google Drive 文件夹：\(cfg.gdrive.folderId)")
+                for key in pdfKeys() { addInfo(pm, "　\(pdfName(key))：\(gdriveStatus[key] ?? "—")") }
             } else {
-                addInfo(menu, "Google Drive：⚠️ \(gdriveSetupProblem ?? "没有启用")")
+                addInfo(pm, "Google Drive：⚠️ \(gdriveSetupProblem ?? "没有启用")")
             }
         }
-        if !scan.unused.isEmpty {
-            addInfo(menu, "注意：含今天日期但不符合规则（不会使用）：")
-            for name in scan.unused.prefix(6) { addInfo(menu, "　　\(name)") }
+        pm.addItem(NSMenuItem.separator())
+        addAction(pm, nil, "重新检查 PDF / 重新载入当前 PDF", #selector(menuReload))
+        addAction(pm, nil, "打开 PDF 文件夹", #selector(menuOpenPDFFolder))
+        if gdOn && gdriveReady {
+            addAction(pm, nil, "在浏览器打开 Google Drive 文件夹", #selector(menuGDriveOpen))
         }
+        pdfItem.submenu = pm
+        menu.addItem(pdfItem)
         if let sc = targetScreen() {
             addInfo(menu, "投影屏：✅ \(screenLabel(sc))")
         } else {
@@ -3750,9 +3805,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         addAction(cm, nil, "识别普通话（翻成英语）", #selector(menuAppleZh), on: appleLanguage.hasPrefix("zh"))
         addAction(cm, nil, "识别英语（翻成中文）", #selector(menuAppleEn), on: appleLanguage.hasPrefix("en"))
         addAction(cm, .captionLanguage, "切换识别语言", #selector(menuAppleLangToggle))
-        addAction(cm, nil, "显示：原文 + 译文", #selector(menuAppleBoth), on: appleDisplay == "both")
-        addAction(cm, nil, "显示：只显示译文", #selector(menuAppleTranslation), on: appleDisplay == "translation")
-        addAction(cm, nil, "显示：只显示原文", #selector(menuAppleOriginal), on: appleDisplay == "original")
+        addAction(cm, .showBoth, "显示：原文 + 译文", #selector(menuAppleBoth), on: appleDisplay == "both")
+        addAction(cm, .showTranslation, "显示：只显示译文", #selector(menuAppleTranslation), on: appleDisplay == "translation")
+        addAction(cm, .showOriginal, "显示：只显示原文", #selector(menuAppleOriginal), on: appleDisplay == "original")
         addInfo(cm, "音频输入：\(cfg.caption.apple.inputDevice.isEmpty ? "系统默认输入" : cfg.caption.apple.inputDevice)"
                 + (cfg.caption.apple.channel > 0 ? "，第 \(cfg.caption.apple.channel) 路" : ""))
         if let names = recognizer?.inputNames(), !names.isEmpty {
@@ -3773,11 +3828,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         menu.addItem(capItem)
         menu.addItem(NSMenuItem.separator())
 
-        addAction(menu, nil, "重新检查 PDF / 重新载入当前 PDF", #selector(menuReload))
-        addAction(menu, nil, "打开 PDF 文件夹", #selector(menuOpenPDFFolder))
-        addAction(menu, nil, "打开 Presenter 文件夹", #selector(menuOpenBase))
-        addAction(menu, nil, "查看日志", #selector(menuOpenLog))
-        menu.addItem(NSMenuItem.separator())
+        let tools = NSMenuItem(title: "工具", action: nil, keyEquivalent: "")
+        let tm = NSMenu()
+        addAction(tm, nil, "打开 Presenter 文件夹", #selector(menuOpenBase))
+        addAction(tm, nil, "查看日志", #selector(menuOpenLog))
+        tools.submenu = tm
+        menu.addItem(tools)
 
         let hk = NSMenuItem(title: hotkeyProblems > 0 ? "快捷键 ⚠️" : "快捷键", action: nil, keyEquivalent: "")
         let sub = NSMenu()
@@ -3880,7 +3936,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
             writeLog("投影屏：\(screenLabel(s))")
         }
         writeLog("PDF 文件夹：\(pdfFolderURL.path)")
-        for key in pdfKeys() { writeLog("\(key) 规则：\(rulePatterns[key] ?? "（无效）")") }
+        for key in pdfKeys() { writeLog("\(pdfName(key)) 规则：\(rulePatterns[key] ?? "（无效）")") }
         writeLog("延长：每次 +\(durationText(extendStep))；PDF 结束前 \(durationText(warnLead)) 提醒")
         writeLog("实时翻译：\(captionDayText())；网址 \(cfg.caption.url)；显示方式 \(captionMode)")
         writeLog("字幕来源：\(captionSourceText())；本机识别：\(recognizer == nil ? appleStatus : "可用")；音频输入 \(cfg.caption.apple.inputDevice)")

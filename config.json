@@ -19,6 +19,11 @@
     "pdf1": "^[A-Z][a-z]+-{date}\\.pdf$",
     "pdf2": "^{date}\\.pdf$"
   },
+  "_pdfNames说明": "菜单和提示里显示的名字（时间表和其他设置里仍然写 pdf1、pdf2）",
+  "pdfNames": {
+    "pdf1": "主日学",
+    "pdf2": "敬拜"
+  },
 
   "_gdrive说明": "启动时（以及每个 PDF 开始前 recheckBeforeMinutes 分钟）用 rclone 从 Google Drive 文件夹把今天的 Google Slides 导出成 PDF，存到上面的 pdfFolder（下载文件夹）。文件名规则同 pdfs。folderId：文件夹网址里 folders/ 后面那一串。remote：rclone config 时起的名字。rclone：留空 = 自动找（Presenter 文件夹里的 rclone 优先）。waitSeconds：PDF 到点时还在下载，最多等几秒。",
   "gdrive": {
@@ -80,6 +85,9 @@
     "caption":      ["ctrl+alt+t"],
     "captionSource": ["ctrl+alt+s"],
     "captionLanguage": ["ctrl+alt+l"],
+    "showOriginal": ["ctrl+alt+o"],
+    "showTranslation": ["ctrl+alt+y"],
+    "showBoth":     ["ctrl+alt+a"],
     "pdfNow":       ["ctrl+alt+p"],
     "welcomeNow":   [],
     "clockNow":     [],
