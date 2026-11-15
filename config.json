@@ -38,7 +38,17 @@
   },
 
   "_caption说明": "实时翻译字幕条。when：firstSunday（每月第一个星期天）、sunday（每个星期天）、always（每天）、never（只手动打开）。showDuring：哪些画面时显示；from/to：几点开始/停止自动显示（to 留空 = 到画面结束）。随时可按 ⌃⌥T 手动显示/隐藏。heightPercent：占投影高度的百分比。lines：显示几行。overlay：true = 叠加在 PDF 下部（PDF 保持全屏，做 PDF 时把这些页的下方 1/5 留白），false = PDF 缩到上方 4/5。background：颜色，或 transparent（透明，字直接显示在 PDF 留白处，带黑色描边）。mode：text（提取文字显示大字）或 page（直接显示原网页）。textSelector：一般留空（自动寻找），找得不准时填 CSS 选择器。",
+  "_caption来源说明": "source：字幕来源，kaleo（Kaleo 网页）或 apple（本机识别 + 翻译），使用时可随时用 ⌃⌥S 或菜单切换。apple 里：language 识别语言 zh-CN（普通话）或 en-US（英语），用 ⌃⌥L 切换；translateTo：auto = 翻成另一种语言，none = 不翻译；inputDevice：音频输入设备名字（包含即可，留空 = 系统默认输入）；channel：0 = 混合所有输入，1 / 2 = 只用第 1 / 2 路输入；display：both（上面一行原文、下面译文）、translation（只显示译文）、original（只显示原文）；clearAfterSeconds：多少秒没人说话就清空字幕。",
   "caption": {
+    "source": "kaleo",
+    "apple": {
+      "language": "zh-CN",
+      "translateTo": "auto",
+      "inputDevice": "Maono ProStudio 2x2 Lite",
+      "channel": 0,
+      "display": "both",
+      "clearAfterSeconds": 15
+    },
     "url": "https://app.withkaleo.com/c/oakville-chinese-hope-church",
     "when": "firstSunday",
     "showDuring": ["pdf2"],
@@ -68,6 +78,8 @@
     "extend":       ["ctrl+alt+e"],
     "auto":         ["ctrl+alt+r"],
     "caption":      ["ctrl+alt+t"],
+    "captionSource": ["ctrl+alt+s"],
+    "captionLanguage": ["ctrl+alt+l"],
     "pdfNow":       ["ctrl+alt+p"],
     "welcomeNow":   [],
     "clockNow":     [],

@@ -20,6 +20,13 @@ import Cocoa
 import WebKit
 import PDFKit
 import Carbon
+#if compiler(>=6.2)
+import Speech
+import Translation
+import AVFoundation
+import CoreAudio
+import AudioToolbox
+#endif
 
 // MARK: - 日志
 
@@ -150,6 +157,8 @@ let defaultHotkeys: [String: [String]] = [
     "extend": ["ctrl+alt+e"],
     "auto": ["ctrl+alt+r"],
     "caption": ["ctrl+alt+t"],
+    "captionSource": ["ctrl+alt+s"],
+    "captionLanguage": ["ctrl+alt+l"],
     "pdfNow": ["ctrl+alt+p"],
     "quit": ["ctrl+alt+escape"],
 ]
@@ -171,7 +180,18 @@ func showLabel(_ show: String) -> String {
     }
 }
 
+struct AppleCaptionConfig {
+    var language = "zh-CN"              // 识别语言：zh-CN（普通话）或 en-US（英语）
+    var translateTo = "auto"            // auto = 翻成另一种；none = 不翻译
+    var inputDevice = "Maono ProStudio 2x2 Lite"
+    var channel = 0                     // 0 = 混合所有输入；1、2 = 只用第几路输入
+    var display = "both"                // both（原文 + 译文）| translation | original
+    var clearAfterSeconds: Double = 15
+}
+
 struct CaptionConfig {
+    var source = "kaleo"                // kaleo（Kaleo 网页）| apple（本机识别 + 翻译）
+    var apple = AppleCaptionConfig()
     var url = "https://app.withkaleo.com/c/oakville-chinese-hope-church"
     var when = "firstSunday"            // firstSunday | sunday | always | never
     var showDuring: [String] = ["pdf2"]
@@ -511,7 +531,8 @@ struct CachedDoc {
 // MARK: - 快捷键解析
 
 enum HotAction: String, CaseIterable {
-    case next, prev, first, last, black, extend, auto, caption, pdfNow, welcomeNow, clockNow, countdownNow, quit
+    case next, prev, first, last, black, extend, auto, caption, captionSource, captionLanguage
+    case pdfNow, welcomeNow, clockNow, countdownNow, quit
 
     var title: String {
         switch self {
@@ -523,6 +544,8 @@ enum HotAction: String, CaseIterable {
         case .extend: return "延长当前画面"
         case .auto: return "恢复按时间表（取消延长/手动切换）"
         case .caption: return "实时翻译 显示/隐藏"
+        case .captionSource: return "字幕来源 Kaleo ↔ 本机识别"
+        case .captionLanguage: return "本机识别语言 普通话 ↔ 英语"
         case .pdfNow: return "立即显示 PDF（当前或下一个）"
         case .welcomeNow: return "立即显示欢迎页"
         case .clockNow: return "立即显示时钟"
@@ -868,17 +891,40 @@ let captionHTML = #"""
 <!doctype html><html><head><meta charset="utf-8"><style>
 html,body{margin:0;height:100%;overflow:hidden;cursor:none;background:transparent}
 #box{position:fixed;top:0;right:0;bottom:0;left:0;box-sizing:border-box;padding:0 3vw;display:flex;flex-direction:column;justify-content:center}
-#clip{overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end}
-#t{color:#fff;font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue","PingFang SC",sans-serif;font-weight:600;overflow-wrap:break-word;word-wrap:break-word}
-#t.ph{opacity:.35;font-weight:400;text-align:center}
-</style></head><body><div id="box"><div id="clip"><div id="t" class="ph"></div></div></div><script>
+.clip{overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end}
+.t{color:#fff;font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue","PingFang SC",sans-serif;font-weight:600;overflow-wrap:break-word;word-wrap:break-word}
+.ph{opacity:.35;font-weight:400;text-align:center}
+#a{opacity:.8}
+</style></head><body><div id="box"><div id="clipA" class="clip"><div id="a" class="t"></div></div><div id="clipB" class="clip"><div id="b" class="t ph"></div></div></div><script>
 (function(){
-var clip=document.getElementById('clip'),el=document.getElementById('t'),ph='',has=false,lines=3;
-function layout(){var h=window.innerHeight||200;var lh=Math.max(10,Math.floor(h*0.88/lines));clip.style.height=(lh*lines)+'px';el.style.lineHeight=lh+'px';el.style.fontSize=Math.floor(lh/(has?1.22:2))+'px';}
-function show(t){if(t){has=true;el.className='';if(el.textContent!==t){el.textContent=t;}}else{has=false;el.className='ph';el.textContent=ph;}layout();}
-window.setStyle=function(fg,bg,n,placeholder){el.style.color=fg;document.documentElement.style.background=bg;document.body.style.background=bg;var light=true;try{var m=getComputedStyle(el).color.match(/\d+(\.\d+)?/g);light=(0.299*m[0]+0.587*m[1]+0.114*m[2])>140;}catch(e){}el.style.textShadow=(String(bg).toLowerCase()==='transparent')?(light?'0 0 6px rgba(0,0,0,.95),0 0 2px #000':'0 0 6px rgba(255,255,255,.95),0 0 2px #fff'):'none';lines=Math.max(1,Number(n)||3);ph=placeholder;show(has?el.textContent:'');};
-window.setCaption=function(t){show(t);};
-window.addEventListener('resize',layout);layout();
+var clipA=document.getElementById('clipA'),clipB=document.getElementById('clipB'),a=document.getElementById('a'),b=document.getElementById('b');
+var ph='',lines=3,ta='',tb='';
+function layout(){
+  var h=window.innerHeight||200;var lh=Math.max(10,Math.floor(h*0.88/lines));
+  var la=0;
+  if(ta&&tb){la=lines>=2?Math.max(1,Math.floor(lines/3)):0;}else if(ta){la=lines;}
+  var lb=lines-la;
+  clipA.style.display=la?'flex':'none';clipA.style.height=(lh*la)+'px';
+  clipB.style.display=lb?'flex':'none';clipB.style.height=(lh*lb)+'px';
+  a.style.lineHeight=lh+'px';b.style.lineHeight=lh+'px';
+  a.style.fontSize=Math.floor(lh/1.22)+'px';
+  b.style.fontSize=Math.floor(lh/((ta||tb)?1.22:2))+'px';
+}
+function render(){
+  if(!ta&&!tb){b.className='t ph';b.textContent=ph;}else{b.className='t';if(b.textContent!==tb){b.textContent=tb;}}
+  if(a.textContent!==ta){a.textContent=ta;}
+  layout();
+}
+window.setStyle=function(fg,bg,n,placeholder){
+  a.style.color=fg;b.style.color=fg;document.documentElement.style.background=bg;document.body.style.background=bg;
+  var light=true;try{var m=getComputedStyle(b).color.match(/\d+(\.\d+)?/g);light=(0.299*m[0]+0.587*m[1]+0.114*m[2])>140;}catch(e){}
+  var sh=(String(bg).toLowerCase()==='transparent')?(light?'0 0 6px rgba(0,0,0,.95),0 0 2px #000':'0 0 6px rgba(255,255,255,.95),0 0 2px #fff'):'none';
+  a.style.textShadow=sh;b.style.textShadow=sh;
+  lines=Math.max(1,Number(n)||3);ph=placeholder;render();
+};
+window.setCaption=function(t){ta='';tb=t||'';render();};
+window.setCaption2=function(o,t){ta=o||'';tb=t||'';if(!tb&&ta){tb=ta;ta='';}render();};
+window.addEventListener('resize',layout);render();
 })();
 </script></body></html>
 """#
@@ -1203,6 +1249,444 @@ let captionSourceJS = #"""
 })();
 """#
 
+// MARK: - 本机实时字幕：Apple 语音识别 + Apple 翻译（需要 macOS 26，并用 Xcode 26 编译）
+
+func languageName(_ id: String) -> String {
+    if id.hasPrefix("zh") { return "普通话" }
+    if id.hasPrefix("en") { return "英语" }
+    return id
+}
+
+/// 本机识别的统一接口。具体实现只在 Xcode 26（Swift 6.2）编译、macOS 26 上运行时才有
+protocol LiveRecognizer: AnyObject {
+    var running: Bool { get }
+    var retryAt: Date? { get }
+    var statusText: String { get }
+    var translationProblem: String? { get }
+    var onUpdate: ((String, String) -> Void)? { get set }   // 原文、译文
+    var onStatus: ((String) -> Void)? { get set }
+    func start(language: String, target: String, device: String, channel: Int)
+    func stop()
+    func clearIfIdle(after seconds: TimeInterval)
+}
+
+#if compiler(>=6.2)
+
+struct LiveCaptionError: LocalizedError {
+    let message: String
+    var errorDescription: String? { return message }
+}
+
+/// 转换音频时，每段音频只交给转换器一次
+final class OnceFlag {
+    var used = false
+}
+
+@available(macOS 26.0, *)
+final class LiveCaptionEngine: LiveRecognizer {
+    private(set) var running = false
+    private(set) var retryAt: Date?
+    private(set) var statusText = "未启动"
+    private(set) var translationProblem: String?
+    var onUpdate: ((String, String) -> Void)?
+    var onStatus: ((String) -> Void)?
+
+    private var generation = 0
+    private var language = "zh-CN"
+    private var target = ""
+    private var startTask: Task<Void, Never>?
+    private var engine: AVAudioEngine?
+    private var analyzer: SpeechAnalyzer?
+    private var continuation: AsyncStream<AnalyzerInput>.Continuation?
+    private var translator: TranslationSession?
+    private var configObserver: NSObjectProtocol?
+
+    private var finals: [String] = []
+    private var translations: [String] = []
+    private var volatileText = ""
+    private var pending: [String] = []
+    private var translating = false
+    private var lastActivity = Date()
+
+    func start(language: String, target: String, device: String, channel: Int) {
+        stop()
+        generation += 1
+        let gen = generation
+        self.language = language
+        self.target = target
+        running = true
+        retryAt = nil
+        translationProblem = nil
+        finals = []
+        translations = []
+        volatileText = ""
+        lastActivity = Date()
+        publish()
+        setStatus("启动中…")
+        startTask = Task { @MainActor in
+            do {
+                try await self.run(gen: gen, device: device, channel: channel)
+            } catch {
+                self.fail(error.localizedDescription, gen: gen, retryAfter: 30)
+            }
+        }
+    }
+
+    func stop() {
+        generation += 1
+        let wasRunning = running
+        running = false
+        startTask?.cancel()
+        startTask = nil
+        if let o = configObserver {
+            NotificationCenter.default.removeObserver(o)
+            configObserver = nil
+        }
+        if let e = engine {
+            e.inputNode.removeTap(onBus: 0)
+            e.stop()
+        }
+        engine = nil
+        continuation?.finish()
+        continuation = nil
+        if let a = analyzer {
+            Task { await a.cancelAndFinishNow() }
+        }
+        analyzer = nil
+        translator = nil
+        pending = []
+        translating = false
+        if wasRunning { setStatus("已停止") }
+    }
+
+    private func fail(_ message: String, gen: Int, retryAfter: TimeInterval) {
+        guard gen == generation else { return }
+        stop()
+        retryAt = Date().addingTimeInterval(retryAfter)
+        setStatus("⚠️ \(message)")
+    }
+
+    func clearIfIdle(after seconds: TimeInterval) {
+        guard seconds > 0, running else { return }
+        let hasText = !finals.isEmpty || !translations.isEmpty || !volatileText.isEmpty
+        if hasText && Date().timeIntervalSince(lastActivity) > seconds {
+            finals = []
+            translations = []
+            volatileText = ""
+            publish()
+        }
+    }
+
+    @MainActor
+    private func run(gen: Int, device: String, channel: Int) async throws {
+        // 1. 权限（第一次会弹出询问）
+        guard await Self.requestMicrophone() else {
+            throw LiveCaptionError(message: "没有麦克风权限：系统设置 › 隐私与安全性 › 麦克风，打开 Presenter")
+        }
+        if !(await Self.requestSpeechAuthorization()) {
+            writeLog("⚠️ 本机识别：没有“语音识别”权限，可能无法识别（系统设置 › 隐私与安全性 › 语音识别）")
+        }
+        guard gen == generation else { return }
+
+        // 2. 识别模型
+        guard SpeechTranscriber.isAvailable else {
+            throw LiveCaptionError(message: "这台 Mac 不支持本机语音识别")
+        }
+        guard let locale = await SpeechTranscriber.supportedLocale(equivalentTo: Locale(identifier: language)) else {
+            throw LiveCaptionError(message: "本机识别不支持\(languageName(language))")
+        }
+        let transcriber = SpeechTranscriber(locale: locale, preset: .progressiveTranscription)
+        if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
+            setStatus("正在下载\(languageName(language))识别模型…（第一次需要几分钟）")
+            try await request.downloadAndInstall()
+        }
+        guard gen == generation else { return }
+        guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
+            throw LiveCaptionError(message: "识别模型没有可用的音频格式")
+        }
+        let analyzer = SpeechAnalyzer(modules: [transcriber])
+        try await analyzer.prepareToAnalyze(in: format)
+        let (stream, cont) = AsyncStream<AnalyzerInput>.makeStream()
+        try await analyzer.start(inputSequence: stream)
+        guard gen == generation else {
+            cont.finish()
+            await analyzer.cancelAndFinishNow()
+            return
+        }
+        self.analyzer = analyzer
+        self.continuation = cont
+
+        // 3. 翻译
+        await setUpTranslator()
+        guard gen == generation else { return }
+
+        // 4. 音频输入
+        let engine = AVAudioEngine()
+        let picked = Self.selectInput(engine: engine, wanted: device)
+        let inFormat = engine.inputNode.outputFormat(forBus: 0)
+        guard inFormat.sampleRate > 0, inFormat.channelCount > 0 else {
+            throw LiveCaptionError(message: "音频输入不可用（\(picked.name)）")
+        }
+        guard let converter = AVAudioConverter(from: inFormat, to: format) else {
+            throw LiveCaptionError(message: "无法转换音频格式")
+        }
+        Self.configure(converter, channel: channel, inputChannels: inFormat.channelCount)
+        engine.inputNode.installTap(onBus: 0, bufferSize: 4096, format: inFormat,
+                                    block: Self.makeTap(converter: converter, format: format, continuation: cont))
+        engine.prepare()
+        try engine.start()
+        self.engine = engine
+        configObserver = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange,
+                                                                object: engine, queue: .main) { [weak self] _ in
+            self?.fail("音频设备有变化，几秒后自动重新开始", gen: gen, retryAfter: 3)
+        }
+
+        var st = "✅ 正在识别\(languageName(language))"
+        if !target.isEmpty { st += "，翻成\(languageName(target))" }
+        st += "（\(picked.name)）"
+        if !picked.ok { st = "⚠️ 找不到“\(device)”，" + st }
+        if let p = translationProblem { st += "；⚠️ \(p)" }
+        setStatus(st)
+
+        // 5. 结果
+        for try await result in transcriber.results {
+            if gen != generation { return }
+            handle(String(result.text.characters), isFinal: result.isFinal)
+        }
+        if gen == generation {
+            throw LiveCaptionError(message: "识别意外结束，稍后自动重新开始")
+        }
+    }
+
+    private func handle(_ text: String, isFinal: Bool) {
+        lastActivity = Date()
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if isFinal {
+            volatileText = ""
+            if !t.isEmpty {
+                finals.append(t)
+                if finals.count > 30 { finals.removeFirst(finals.count - 30) }
+                if translator != nil {
+                    pending.append(t)
+                    if pending.count > 6 { pending.removeFirst(pending.count - 6) }
+                    if !translating { pumpTranslations() }
+                }
+            }
+        } else {
+            volatileText = t
+        }
+        publish()
+    }
+
+    @MainActor
+    private func setUpTranslator() async {
+        translator = nil
+        translationProblem = nil
+        guard !target.isEmpty else { return }
+        let src = Locale.Language(identifier: Self.translationID(language))
+        let dst = Locale.Language(identifier: Self.translationID(target))
+        let status = await LanguageAvailability().status(from: src, to: dst)
+        switch status {
+        case .installed:
+            translator = TranslationSession(installedSource: src, target: dst)
+        case .supported:
+            translationProblem = "翻译语言还没下载：系统设置 › 通用 › 语言与地区 › 翻译语言，下载中文（普通话）和英语"
+        case .unsupported:
+            translationProblem = "不支持\(languageName(language))到\(languageName(target))的翻译"
+        @unknown default:
+            translationProblem = "无法确定翻译语言的状态"
+        }
+        if let p = translationProblem { writeLog("⚠️ 本机翻译：\(p)") }
+    }
+
+    private func pumpTranslations() {
+        guard let tr = translator, !pending.isEmpty else {
+            translating = false
+            return
+        }
+        translating = true
+        let text = pending.removeFirst()
+        let gen = generation
+        Task { @MainActor in
+            var out = ""
+            do {
+                out = try await tr.translate(text).targetText
+            } catch {
+                if self.translationProblem == nil {
+                    self.translationProblem = "翻译出错：\(error.localizedDescription)"
+                    writeLog("⚠️ 本机翻译出错：\(error.localizedDescription)")
+                }
+            }
+            guard gen == self.generation else { return }
+            let t = out.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !t.isEmpty {
+                self.translations.append(t)
+                if self.translations.count > 30 { self.translations.removeFirst(self.translations.count - 30) }
+                self.publish()
+            }
+            self.pumpTranslations()
+        }
+    }
+
+    private func publish() {
+        var parts = finals
+        if !volatileText.isEmpty { parts.append(volatileText) }
+        let original = Self.tail(parts, zh: language.hasPrefix("zh"), max: 240)
+        let translated = Self.tail(translations, zh: target.hasPrefix("zh"), max: 400)
+        onUpdate?(original, translated)
+    }
+
+    private func setStatus(_ s: String) {
+        statusText = s
+        onStatus?(s)
+    }
+
+    // MARK: 工具
+
+    /// 最后几段文字（中文不加空格，英文用空格连接）
+    static func tail(_ parts: [String], zh: Bool, max: Int) -> String {
+        var picked: [String] = []
+        var n = 0
+        for p in parts.reversed() {
+            picked.insert(p, at: 0)
+            n += p.count
+            if n >= max { break }
+        }
+        let s = picked.joined(separator: zh ? "" : " ")
+        return s.count > max ? String(s.suffix(max)) : s
+    }
+
+    static func translationID(_ id: String) -> String {
+        if id.hasPrefix("zh") { return "zh-Hans" }
+        if id.hasPrefix("en") { return "en" }
+        return id
+    }
+
+    static func requestMicrophone() async -> Bool {
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized:
+            return true
+        case .notDetermined:
+            return await AVCaptureDevice.requestAccess(for: .audio)
+        default:
+            return false
+        }
+    }
+
+    static func requestSpeechAuthorization() async -> Bool {
+        let s = SFSpeechRecognizer.authorizationStatus()
+        if s == .authorized { return true }
+        if s == .denied || s == .restricted { return false }
+        return await withCheckedContinuation { cont in
+            SFSpeechRecognizer.requestAuthorization { status in
+                cont.resume(returning: status == .authorized)
+            }
+        }
+    }
+
+    /// 所有有输入声道的音频设备
+    static func inputDevices() -> [(id: AudioDeviceID, name: String)] {
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDevices,
+                                              mScope: kAudioObjectPropertyScopeGlobal,
+                                              mElement: kAudioObjectPropertyElementMain)
+        var size: UInt32 = 0
+        let system = AudioObjectID(kAudioObjectSystemObject)
+        guard AudioObjectGetPropertyDataSize(system, &addr, 0, nil, &size) == noErr, size > 0 else { return [] }
+        let count = Int(size) / MemoryLayout<AudioDeviceID>.size
+        var ids = [AudioDeviceID](repeating: 0, count: count)
+        guard AudioObjectGetPropertyData(system, &addr, 0, nil, &size, &ids) == noErr else { return [] }
+        var out: [(id: AudioDeviceID, name: String)] = []
+        for id in ids where inputChannelCount(id) > 0 {
+            out.append((id: id, name: deviceName(id) ?? "音频设备 \(id)"))
+        }
+        return out
+    }
+
+    static func inputChannelCount(_ id: AudioDeviceID) -> Int {
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyStreamConfiguration,
+                                              mScope: kAudioObjectPropertyScopeInput,
+                                              mElement: kAudioObjectPropertyElementMain)
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(id, &addr, 0, nil, &size) == noErr, size > 0 else { return 0 }
+        let raw = UnsafeMutableRawPointer.allocate(byteCount: Int(size), alignment: MemoryLayout<AudioBufferList>.alignment)
+        defer { raw.deallocate() }
+        guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, raw) == noErr else { return 0 }
+        let list = UnsafeMutableAudioBufferListPointer(raw.assumingMemoryBound(to: AudioBufferList.self))
+        var n = 0
+        for b in list { n += Int(b.mNumberChannels) }
+        return n
+    }
+
+    static func deviceName(_ id: AudioDeviceID) -> String? {
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioObjectPropertyName,
+                                              mScope: kAudioObjectPropertyScopeGlobal,
+                                              mElement: kAudioObjectPropertyElementMain)
+        var name: Unmanaged<CFString>?
+        var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        let status = withUnsafeMutablePointer(to: &name) { ptr in
+            AudioObjectGetPropertyData(id, &addr, 0, nil, &size, ptr)
+        }
+        guard status == noErr, let n = name else { return nil }
+        return n.takeRetainedValue() as String
+    }
+
+    /// 按名字选音频输入（包含即可）；找不到就用系统默认输入
+    static func selectInput(engine: AVAudioEngine, wanted: String) -> (name: String, ok: Bool) {
+        let w = wanted.trimmingCharacters(in: .whitespaces)
+        if w.isEmpty { return (name: "系统默认输入", ok: true) }
+        let devices = inputDevices()
+        guard let d = devices.first(where: { $0.name.localizedCaseInsensitiveContains(w) }) else {
+            writeLog("⚠️ 找不到音频输入“\(w)”，改用系统默认输入。现有输入：" + devices.map { $0.name }.joined(separator: "、"))
+            return (name: "系统默认输入", ok: false)
+        }
+        guard let au = engine.inputNode.audioUnit else { return (name: "系统默认输入", ok: false) }
+        var id = d.id
+        let status = AudioUnitSetProperty(au, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
+                                          &id, UInt32(MemoryLayout<AudioDeviceID>.size))
+        if status != noErr {
+            writeLog("⚠️ 设置音频输入“\(d.name)”失败（\(status)），改用系统默认输入")
+            return (name: "系统默认输入", ok: false)
+        }
+        return (name: d.name, ok: true)
+    }
+
+    /// 多声道 → 单声道：channel = 0 混合所有声道；1、2… 只用第几个输入
+    static func configure(_ converter: AVAudioConverter, channel: Int, inputChannels: AVAudioChannelCount) {
+        guard converter.outputFormat.channelCount == 1, inputChannels > 1 else { return }
+        if channel >= 1 && channel <= Int(inputChannels) {
+            converter.channelMap = [NSNumber(value: channel - 1)]
+        } else {
+            converter.downmix = true
+        }
+    }
+
+    /// 音频线程里：把每段声音转换成识别模型要的格式，送进识别器
+    static func makeTap(converter: AVAudioConverter, format: AVAudioFormat,
+                        continuation: AsyncStream<AnalyzerInput>.Continuation) -> AVAudioNodeTapBlock {
+        return { buffer, _ in
+            let ratio = format.sampleRate / buffer.format.sampleRate
+            let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 64
+            guard let out = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else { return }
+            let flag = OnceFlag()
+            var error: NSError?
+            let status = converter.convert(to: out, error: &error) { _, inputStatus in
+                if flag.used {
+                    inputStatus.pointee = .noDataNow
+                    return nil
+                }
+                flag.used = true
+                inputStatus.pointee = .haveData
+                return buffer
+            }
+            if status == .error || out.frameLength == 0 { return }
+            continuation.yield(AnalyzerInput(buffer: out))
+        }
+    }
+}
+
+#endif
+
+
 // MARK: - 主程序
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavigationDelegate, WKScriptMessageHandler {
@@ -1284,6 +1768,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
     var captionTextAt: Date?
     var captionPath: String?
     var captionActivity = Date()
+    var captionSource = "kaleo"         // kaleo | apple
+    var captionSourceArg: String?       // --apple / --kaleo
+    var recognizer: LiveRecognizer?
+    var appleLanguage = "zh-CN"
+    var appleDisplay = "both"
+    var appleOriginal = ""
+    var appleTranslation = ""
+    var appleStatus = "未启动"
 
     // 快捷键
     let hotKeys = HotKeyCenter()
@@ -1352,6 +1844,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         }
         computeCaptionDay()
         captionMode = cfg.caption.mode
+        captionSource = captionSourceArg ?? cfg.caption.source
+        appleLanguage = cfg.caption.apple.language
+        appleDisplay = cfg.caption.apple.display
+        setupRecognizer()
+        if captionSource == "apple" && recognizer == nil {
+            problems.append("本机识别需要 macOS 26，并用 Xcode 26 编译；字幕来源已改用 Kaleo")
+            captionSource = "kaleo"
+        }
 
         activity = ProcessInfo.processInfo.beginActivity(
             options: [.userInitiated, .idleDisplaySleepDisabled, .idleSystemSleepDisabled, .latencyCritical],
@@ -1393,6 +1893,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        recognizer?.stop()
         hotKeys.unregisterAll()
         if let a = activity { ProcessInfo.processInfo.endActivity(a) }
         writeLog("===== Presenter 退出 =====")
@@ -1427,6 +1928,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
                 if let v = value() { atArg = parseHMS(v) }
             case "--dir":
                 dirArg = value()
+            case "--apple":
+                captionSourceArg = "apple"
+            case "--kaleo":
+                captionSourceArg = "kaleo"
             case "--caption":
                 captionForced = true
             case "--nogdrive":
@@ -1512,6 +2017,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
             if let v = c["heightPercent"] as? Double, v >= 5, v <= 50 { cfg.caption.heightPercent = v }
             if let v = c["lines"] as? Int, v >= 1, v <= 6 { cfg.caption.lines = v }
             if let v = c["mode"] as? String, v == "text" || v == "page" { cfg.caption.mode = v }
+            if let v = c["source"] as? String, v == "kaleo" || v == "apple" { cfg.caption.source = v }
+            if let a = c["apple"] as? [String: Any] {
+                if let v = a["language"] as? String { cfg.caption.apple.language = v.lowercased().hasPrefix("en") ? "en-US" : "zh-CN" }
+                if let v = a["translateTo"] as? String { cfg.caption.apple.translateTo = v.trimmingCharacters(in: .whitespaces) }
+                if let v = a["inputDevice"] as? String { cfg.caption.apple.inputDevice = v.trimmingCharacters(in: .whitespaces) }
+                if let v = a["channel"] as? Int, v >= 0, v <= 16 { cfg.caption.apple.channel = v }
+                if let v = a["display"] as? String, ["both", "translation", "original"].contains(v) { cfg.caption.apple.display = v }
+                if let v = a["clearAfterSeconds"] as? Double, v >= 0 { cfg.caption.apple.clearAfterSeconds = v }
+            }
             if let v = c["textSelector"] as? String { cfg.caption.textSelector = v.trimmingCharacters(in: .whitespaces) }
             if let v = c["color"] as? String, !v.isEmpty { cfg.caption.color = v }
             if let v = c["background"] as? String, !v.isEmpty { cfg.caption.background = v }
@@ -1766,7 +2280,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         pdfView.frame = mainRect
         blackView.frame = b
 
-        let pageOnTop = captionVisible && captionMode == "page"
+        let pageOnTop = captionVisible && captionMode == "page" && captionSource == "kaleo"
         if pageOnTop != sourceOnTop {
             sourceOnTop = pageOnTop
             if pageOnTop {
@@ -1777,7 +2291,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         }
         sourceView.frame = pageOnTop ? capRect : b
         captionView.frame = capRect
-        captionView.isHidden = !(captionVisible && captionMode == "text")
+        captionView.isHidden = !(captionVisible && !pageOnTop)
         if pdfShownKey != nil {
             pdfView.autoScales = true
             pdfView.layoutDocumentView()
@@ -1803,7 +2317,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         } else if wv === captionView {
             captionPageLoaded = true
             applyCaptionStyle()
-            pushCaption(captionText)
+            refreshCaptionDisplay()
         } else {
             pageLoaded = true
             pushStageMode()
@@ -1909,7 +2423,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
 
     @objc func didWake(_ note: Notification) {
         writeLog("系统唤醒")
-        if sourceRequested { loadSource("系统唤醒后重新载入") }
+        if sourceRequested && captionSource == "kaleo" { loadSource("系统唤醒后重新载入") }
+        if let r = recognizer, r.running, captionSource == "apple" { startRecognizer("系统唤醒后重新开始") }
         tick()
     }
 
@@ -2510,7 +3025,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
     }
 
     func captionTick(_ now: Date) {
-        guard captionNeededSoon(now) else { return }
+        let needed = captionNeededSoon(now)
+        if captionSource == "apple" {
+            guard let r = recognizer else { return }
+            if needed {
+                if !r.running {
+                    if let retry = r.retryAt, Date() < retry { return }
+                    startRecognizer("开始")
+                }
+                r.clearIfIdle(after: cfg.caption.apple.clearAfterSeconds)
+            } else if r.running {
+                r.stop()
+                writeLog("本机识别：暂停（现在不需要显示字幕）")
+            }
+            return
+        }
+        if let r = recognizer, r.running { r.stop() }
+        guard needed else { return }
         if !sourceRequested {
             loadSource("开始载入")
         } else if let r = sourceRetryAt, now >= r {
@@ -2560,8 +3091,108 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
     }
 
     func pushCaption(_ t: String) {
+        if captionSource == "kaleo" { refreshCaptionDisplay() }
+    }
+
+    /// 把当前字幕来源的文字显示到字幕条
+    func refreshCaptionDisplay() {
         guard captionPageLoaded else { return }
-        captionView.evaluateJavaScript("window.setCaption && window.setCaption(\(jsString(t)))", completionHandler: nil)
+        let js: String
+        if captionSource == "apple" {
+            let o = appleOriginal
+            var t = appleTranslation
+            let noTranslation = appleTargetFor(appleLanguage).isEmpty || recognizer?.translationProblem != nil
+            if noTranslation { t = "" }
+            switch appleDisplay {
+            case "original":
+                js = "window.setCaption && window.setCaption(\(jsString(o)))"
+            case "translation":
+                js = "window.setCaption && window.setCaption(\(jsString(noTranslation ? o : t)))"
+            default:
+                js = "window.setCaption2 && window.setCaption2(\(jsString(o)), \(jsString(t)))"
+            }
+        } else {
+            js = "window.setCaption && window.setCaption(\(jsString(captionText)))"
+        }
+        captionView.evaluateJavaScript(js, completionHandler: nil)
+    }
+
+    /// 本机识别：要翻成哪种语言（空 = 不翻译）
+    func appleTargetFor(_ lang: String) -> String {
+        let t = cfg.caption.apple.translateTo.lowercased()
+        if t == "auto" || t.isEmpty { return lang.hasPrefix("zh") ? "en-US" : "zh-CN" }
+        if t == "none" { return "" }
+        let target = t.hasPrefix("en") ? "en-US" : "zh-CN"
+        return target == lang ? "" : target
+    }
+
+    func setupRecognizer() {
+        #if compiler(>=6.2)
+        if #available(macOS 26.0, *) {
+            let r = LiveCaptionEngine()
+            r.onUpdate = { [weak self] original, translated in
+                guard let self = self else { return }
+                self.appleOriginal = original
+                self.appleTranslation = translated
+                if self.captionSource == "apple" { self.refreshCaptionDisplay() }
+            }
+            r.onStatus = { [weak self] status in
+                self?.appleStatus = status
+                writeLog("本机识别：\(status)")
+            }
+            recognizer = r
+        }
+        #endif
+        if recognizer == nil {
+            appleStatus = "⚠️ 本机识别需要 macOS 26，并用 Xcode 26 编译"
+        }
+    }
+
+    func startRecognizer(_ why: String) {
+        guard let r = recognizer else { return }
+        appleOriginal = ""
+        appleTranslation = ""
+        refreshCaptionDisplay()
+        writeLog("本机识别：\(why)（\(languageName(appleLanguage))，输入 \(cfg.caption.apple.inputDevice)）")
+        r.start(language: appleLanguage, target: appleTargetFor(appleLanguage),
+                device: cfg.caption.apple.inputDevice, channel: cfg.caption.apple.channel)
+    }
+
+    func captionSourceText() -> String {
+        if captionSource == "apple" {
+            let t = appleTargetFor(appleLanguage)
+            return "本机识别（\(languageName(appleLanguage))" + (t.isEmpty ? "" : " → \(languageName(t))") + "）"
+        }
+        return "Kaleo 网页"
+    }
+
+    func setCaptionSource(_ src: String) {
+        guard src != captionSource else { return }
+        if src == "apple" && recognizer == nil {
+            infoHUD.show("本机识别不可用：\(appleStatus)", on: builtInScreen(), seconds: 5)
+            return
+        }
+        captionSource = src
+        writeLog("字幕来源：\(captionSourceText())")
+        infoHUD.show("字幕来源：\(captionSourceText())", on: builtInScreen(), seconds: 3)
+        if src == "kaleo" { recognizer?.stop() }
+        layoutContent()
+        refreshCaptionDisplay()
+        captionTick(appNow())
+    }
+
+    func setAppleLanguage(_ lang: String) {
+        guard lang != appleLanguage else { return }
+        appleLanguage = lang
+        let msg = "本机识别语言：\(languageName(lang))" + (appleTargetFor(lang).isEmpty ? "" : "，翻成\(languageName(appleTargetFor(lang)))")
+        writeLog(msg)
+        infoHUD.show(msg, on: builtInScreen(), seconds: 3)
+        if let r = recognizer, r.running { startRecognizer("切换语言") }
+    }
+
+    func setAppleDisplay(_ d: String) {
+        appleDisplay = d
+        refreshCaptionDisplay()
     }
 
     func applyCaptionStyle() {
@@ -2585,8 +3216,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         var hint = ""
         if let k = hotkeyLabels[.caption], v != nil { hint = "\n再按 \(k) " + (v == true ? "隐藏" : "显示") }
         infoHUD.show("实时翻译：\(text)\(hint)", on: builtInScreen(), seconds: 3)
-        if v == true && !sourceRequested { loadSource("手动打开") }
+        if v == true && !sourceRequested && captionSource == "kaleo" { loadSource("手动打开") }
         tick()
+        captionTick(appNow())
     }
 
     func setCaptionMode(_ m: String) {
@@ -2740,6 +3372,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         case .caption:
             setCaptionOverride(!captionVisible)
             return
+        case .captionSource:
+            setCaptionSource(captionSource == "apple" ? "kaleo" : "apple")
+            return
+        case .captionLanguage:
+            if captionSource != "apple" {
+                infoHUD.show("现在的字幕来源是 Kaleo；先按 \(hotkeyLabels[.captionSource] ?? "菜单") 切换到本机识别", on: builtInScreen(), seconds: 4)
+            } else {
+                setAppleLanguage(appleLanguage.hasPrefix("zh") ? "en-US" : "zh-CN")
+            }
+            return
         case .pdfNow:
             if let s = pdfNowShow() { setManual(s) }
             return
@@ -2833,7 +3475,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
             t = "⏱结束"
         }
         if let u = holdUntil { t += "→" + shortTime(u) }
-        if captionVisible { t += "💬" }
+        if captionVisible { t += captionSource == "apple" ? "🎙" : "💬" }
         if !blackView.isHidden { t = "⬛" + t }
         if hasWarning { t = "⚠️" + t }
         if t != lastTitle {
@@ -2915,7 +3557,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
             lines.append("投影屏：⚠️ 未检测到，接上投影（扩展模式）后才会显示")
         }
         if captionToday {
-            lines.append("实时翻译：✅ 今天在 \(captionDuringText()) 时显示在投影下方")
+            lines.append("实时翻译：✅ 今天在 \(captionDuringText()) 时显示在投影下方（来源：\(captionSourceText())）")
         } else if let t = hotkeyLabels[.caption] {
             lines.append("实时翻译：今天不自动显示（需要时按 \(t)）")
         }
@@ -3018,9 +3660,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         let capItem = NSMenuItem(title: "实时翻译" + (captionVisible ? "（显示中）" : ""), action: nil, keyEquivalent: "")
         let cm = NSMenu()
         addInfo(cm, captionDayText())
-        addInfo(cm, "网页：" + (sourceRequested ? sourceState : "未载入（需要时自动载入）"))
-        addInfo(cm, captionTextStatus())
-        if let p = captionPath { addInfo(cm, "文字区域：\(p)") }
+        cm.addItem(NSMenuItem.separator())
+        addInfo(cm, "字幕来源：")
+        addAction(cm, nil, "Kaleo 网页", #selector(menuSourceKaleo), on: captionSource == "kaleo")
+        addAction(cm, nil, "本机识别 + 翻译（Apple）", #selector(menuSourceApple), on: captionSource == "apple")
+        addAction(cm, .captionSource, "切换字幕来源", #selector(menuSourceToggle))
         cm.addItem(NSMenuItem.separator())
         addAction(cm, .caption, "显示/隐藏（切换）", #selector(menuCaptionToggle))
         addAction(cm, nil, "自动（按日期和时间表）", #selector(menuCaptionAuto), on: captionOverride == nil)
@@ -3028,6 +3672,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         addAction(cm, nil, "隐藏", #selector(menuCaptionOff), on: captionOverride == false)
         addInfo(cm, "（手动显示/隐藏到下一个自动开关时间为止）")
         cm.addItem(NSMenuItem.separator())
+        // 本机识别
+        addInfo(cm, "本机识别：\(appleStatus)")
+        if let p = recognizer?.translationProblem { addInfo(cm, "翻译：⚠️ \(p)") }
+        addAction(cm, nil, "识别普通话（翻成英语）", #selector(menuAppleZh), on: appleLanguage.hasPrefix("zh"))
+        addAction(cm, nil, "识别英语（翻成中文）", #selector(menuAppleEn), on: appleLanguage.hasPrefix("en"))
+        addAction(cm, .captionLanguage, "切换识别语言", #selector(menuAppleLangToggle))
+        addAction(cm, nil, "显示：原文 + 译文", #selector(menuAppleBoth), on: appleDisplay == "both")
+        addAction(cm, nil, "显示：只显示译文", #selector(menuAppleTranslation), on: appleDisplay == "translation")
+        addAction(cm, nil, "显示：只显示原文", #selector(menuAppleOriginal), on: appleDisplay == "original")
+        addInfo(cm, "音频输入：\(cfg.caption.apple.inputDevice.isEmpty ? "系统默认输入" : cfg.caption.apple.inputDevice)")
+        cm.addItem(NSMenuItem.separator())
+        // Kaleo
+        addInfo(cm, "Kaleo 网页：" + (sourceRequested ? sourceState : "未载入（需要时自动载入）"))
+        addInfo(cm, captionTextStatus())
+        if let p = captionPath { addInfo(cm, "文字区域：\(p)") }
         addAction(cm, nil, "显示方式：提取文字（大字）", #selector(menuCaptionText), on: captionMode == "text")
         addAction(cm, nil, "显示方式：原网页", #selector(menuCaptionPage), on: captionMode == "page")
         cm.addItem(NSMenuItem.separator())
@@ -3068,6 +3727,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
     @objc func menuAuto() { run(.auto) }
     @objc func menuBlack() { run(.black) }
     @objc func menuCaptionToggle() { run(.caption) }
+    @objc func menuSourceKaleo() { setCaptionSource("kaleo") }
+    @objc func menuSourceApple() { setCaptionSource("apple") }
+    @objc func menuSourceToggle() { run(.captionSource) }
+    @objc func menuAppleZh() { setAppleLanguage("zh-CN") }
+    @objc func menuAppleEn() { setAppleLanguage("en-US") }
+    @objc func menuAppleLangToggle() { run(.captionLanguage) }
+    @objc func menuAppleBoth() { setAppleDisplay("both") }
+    @objc func menuAppleTranslation() { setAppleDisplay("translation") }
+    @objc func menuAppleOriginal() { setAppleDisplay("original") }
     @objc func menuCaptionAuto() { setCaptionOverride(nil) }
     @objc func menuCaptionOn() { setCaptionOverride(true) }
     @objc func menuCaptionOff() { setCaptionOverride(false) }
@@ -3139,6 +3807,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         for key in pdfKeys() { writeLog("\(key) 规则：\(rulePatterns[key] ?? "（无效）")") }
         writeLog("延长：每次 +\(durationText(extendStep))；PDF 结束前 \(durationText(warnLead)) 提醒")
         writeLog("实时翻译：\(captionDayText())；网址 \(cfg.caption.url)；显示方式 \(captionMode)")
+        writeLog("字幕来源：\(captionSourceText())；本机识别：\(recognizer == nil ? appleStatus : "可用")；音频输入 \(cfg.caption.apple.inputDevice)")
         if gdriveReady, let exe = gdriveExe {
             writeLog("Google Drive：rclone = \(exe.path)；远程 \(cfg.gdrive.remote)；文件夹 \(cfg.gdrive.folderId)；下载到 \(pdfFolderURL.path)")
         }
