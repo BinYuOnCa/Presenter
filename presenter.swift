@@ -1301,6 +1301,9 @@ final class LiveCaptionEngine: LiveRecognizer {
     private var continuation: AsyncStream<AnalyzerInput>.Continuation?
     private var translator: TranslationSession?
     private var configObserver: NSObjectProtocol?
+    private var analyzerFormat: AVAudioFormat?
+    private var channel = 0
+    private var audioRestarts: [Date] = []
 
     private var finals: [String] = []
     private var translations: [String] = []
@@ -1315,6 +1318,8 @@ final class LiveCaptionEngine: LiveRecognizer {
         let gen = generation
         self.language = language
         self.target = target
+        self.channel = channel
+        audioRestarts = []
         running = true
         retryAt = nil
         translationProblem = nil
@@ -1348,6 +1353,7 @@ final class LiveCaptionEngine: LiveRecognizer {
             e.stop()
         }
         engine = nil
+        analyzerFormat = nil
         continuation?.finish()
         continuation = nil
         if let a = analyzer {
@@ -1401,8 +1407,10 @@ final class LiveCaptionEngine: LiveRecognizer {
             throw LiveCaptionError(message: "本机识别不支持\(languageName(language))")
         }
         let transcriber = SpeechTranscriber(locale: locale, preset: .progressiveTranscription)
+        let installed = await SpeechTranscriber.installedLocales
+        let isInstalled = installed.contains { $0.identifier(.bcp47) == locale.identifier(.bcp47) }
         if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
-            setStatus("正在下载\(languageName(language))识别模型…（第一次需要几分钟）")
+            if !isInstalled { setStatus("正在下载\(languageName(language))识别模型…（第一次需要几分钟）") }
             try await request.downloadAndInstall()
         }
         guard gen == generation else { return }
@@ -1420,6 +1428,7 @@ final class LiveCaptionEngine: LiveRecognizer {
         }
         self.analyzer = analyzer
         self.continuation = cont
+        self.analyzerFormat = format
 
         // 3. 翻译
         await setUpTranslator()
@@ -1428,22 +1437,14 @@ final class LiveCaptionEngine: LiveRecognizer {
         // 4. 音频输入
         let engine = AVAudioEngine()
         let picked = Self.selectInput(engine: engine, wanted: device)
-        let inFormat = engine.inputNode.outputFormat(forBus: 0)
-        guard inFormat.sampleRate > 0, inFormat.channelCount > 0 else {
-            throw LiveCaptionError(message: "音频输入不可用（\(picked.name)）")
-        }
-        guard let converter = AVAudioConverter(from: inFormat, to: format) else {
-            throw LiveCaptionError(message: "无法转换音频格式")
-        }
-        Self.configure(converter, channel: channel, inputChannels: inFormat.channelCount)
-        engine.inputNode.installTap(onBus: 0, bufferSize: 4096, format: inFormat,
-                                    block: Self.makeTap(converter: converter, format: format, continuation: cont))
-        engine.prepare()
-        try engine.start()
+        try startAudio(engine)
         self.engine = engine
+        // 切换输入设备、刚启动时，系统常会发“音频设置有变化”的通知：引擎还在运行就不管，停了就原地重新接上
         configObserver = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange,
                                                                 object: engine, queue: .main) { [weak self] _ in
-            self?.fail("音频设备有变化，几秒后自动重新开始", gen: gen, retryAfter: 3)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                self?.audioConfigChanged(gen: gen)
+            }
         }
 
         var st = "✅ 正在识别\(languageName(language))"
@@ -1460,6 +1461,47 @@ final class LiveCaptionEngine: LiveRecognizer {
         }
         if gen == generation {
             throw LiveCaptionError(message: "识别意外结束，稍后自动重新开始")
+        }
+    }
+
+    /// 装上音频“水龙头”并启动引擎（按当前的输入格式）
+    private func startAudio(_ e: AVAudioEngine) throws {
+        guard let format = analyzerFormat, let cont = continuation else {
+            throw LiveCaptionError(message: "识别器还没准备好")
+        }
+        e.inputNode.removeTap(onBus: 0)
+        let inFormat = e.inputNode.outputFormat(forBus: 0)
+        guard inFormat.sampleRate > 0, inFormat.channelCount > 0 else {
+            throw LiveCaptionError(message: "音频输入不可用")
+        }
+        guard let converter = AVAudioConverter(from: inFormat, to: format) else {
+            throw LiveCaptionError(message: "无法转换音频格式")
+        }
+        Self.configure(converter, channel: channel, inputChannels: inFormat.channelCount)
+        e.inputNode.installTap(onBus: 0, bufferSize: 4096, format: inFormat,
+                               block: Self.makeTap(converter: converter, format: format, continuation: cont))
+        e.prepare()
+        try e.start()
+    }
+
+    private func audioConfigChanged(gen: Int) {
+        guard gen == generation, let e = engine else { return }
+        if e.isRunning {
+            writeLog("本机识别：音频设置有变化，引擎仍在运行，继续")
+            return
+        }
+        let now = Date()
+        audioRestarts = audioRestarts.filter { now.timeIntervalSince($0) < 30 }
+        if audioRestarts.count >= 3 {
+            fail("音频设备一直在变化，30 秒后重新开始", gen: gen, retryAfter: 30)
+            return
+        }
+        audioRestarts.append(now)
+        do {
+            try startAudio(e)
+            writeLog("本机识别：音频设置有变化，已重新接上音频")
+        } catch {
+            fail("音频设备有变化：\(error.localizedDescription)", gen: gen, retryAfter: 5)
         }
     }
 
@@ -1635,6 +1677,16 @@ final class LiveCaptionEngine: LiveRecognizer {
         return n.takeRetainedValue() as String
     }
 
+    static func defaultInputDevice() -> AudioDeviceID? {
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultInputDevice,
+                                              mScope: kAudioObjectPropertyScopeGlobal,
+                                              mElement: kAudioObjectPropertyElementMain)
+        var id = AudioDeviceID(0)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        let status = AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &id)
+        return status == noErr && id != 0 ? id : nil
+    }
+
     /// 按名字选音频输入（包含即可）；找不到就用系统默认输入
     static func selectInput(engine: AVAudioEngine, wanted: String) -> (name: String, ok: Bool) {
         let w = wanted.trimmingCharacters(in: .whitespaces)
@@ -1643,6 +1695,9 @@ final class LiveCaptionEngine: LiveRecognizer {
         guard let d = devices.first(where: { $0.name.localizedCaseInsensitiveContains(w) }) else {
             writeLog("⚠️ 找不到音频输入“\(w)”，改用系统默认输入。现有输入：" + devices.map { $0.name }.joined(separator: "、"))
             return (name: "系统默认输入", ok: false)
+        }
+        if let def = defaultInputDevice(), def == d.id {
+            return (name: d.name, ok: true)   // 已经是系统默认输入，不用切换
         }
         guard let au = engine.inputNode.audioUnit else { return (name: "系统默认输入", ok: false) }
         var id = d.id
