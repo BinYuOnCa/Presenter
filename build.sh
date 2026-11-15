@@ -33,7 +33,7 @@ fi
 echo "▶ 正在编译（Apple 芯片 arm64）…"
 if ! xcrun swiftc -O -swift-version 5 \
      -target arm64-apple-macos11.0 \
-     -framework Cocoa -framework WebKit -framework PDFKit -framework Carbon \
+     -framework Cocoa -framework WebKit -framework PDFKit -framework Carbon -framework Network \
      ${EXTRA[@]+"${EXTRA[@]}"} \
      presenter.swift -o "$TMP/Presenter"; then
   echo "❌ 编译失败，请把上面的错误信息发给我"
@@ -51,8 +51,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleDisplayName</key><string>Presenter</string>
   <key>CFBundleExecutable</key><string>Presenter</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>2.3</string>
-  <key>CFBundleVersion</key><string>5</string>
+  <key>CFBundleShortVersionString</key><string>2.4</string>
+  <key>CFBundleVersion</key><string>6</string>
   <key>LSMinimumSystemVersion</key><string>11.0</string>
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
@@ -77,3 +77,4 @@ echo "   注意：每次重新编译后，第一次运行时系统会询问能�
 echo "         第一次使用本机识别时，还会询问“麦克风”和“语音识别”权限，也请点“允许”。"
 echo "   自动启动：bash autostart.sh on 09:05（每周日 9:05）"
 echo "   复查字幕记录：open Presenter.app --args --review（最近一次；或 --review 20261115）"
+echo "   OBS 字幕页：http://127.0.0.1:8765/caption（OBS › 来源 › 浏览器）"

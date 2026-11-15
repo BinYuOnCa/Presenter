@@ -23,6 +23,7 @@ import WebKit
 import PDFKit
 import Carbon
 import NaturalLanguage
+import Network
 #if compiler(>=6.2)
 import Speech
 import Translation
@@ -207,6 +208,9 @@ struct AppleCaptionConfig {
     var sentencePauseSeconds: Double = 1.2   // 停顿几秒算一句说完
     var translationQuality = "high"     // high（高保真，Apple Intelligence 可用时）| fast
     var saveTranscript = true           // 把识别和翻译存到 transcripts/transcript-yyyymmdd.txt
+    var autoPunctuation = "zh"          // 按停顿补标点：zh（只对普通话）| all | off
+    var pauseComma: Double = 0.3        // 停顿几秒补逗号
+    var pausePeriod: Double = 0.8       // 停顿几秒补句号
 }
 
 struct GlossaryConfig {
@@ -237,6 +241,20 @@ struct CaptionConfig {
     var overlay = true                  // true = 叠加在 PDF 下部（PDF 保持全屏）；false = PDF 缩到上方 4/5
     var pageZoom: Double = 1.5
     var reloadIfStaleMinutes: Double = 10
+    var marginPercent: Double = 10      // 字幕左右各留白多少（占屏幕宽度的百分比）
+}
+
+/// OBS 字幕叠加：Presenter 在本机提供一个网页，OBS 用“浏览器”来源加到所有场景上
+struct OBSCaptionConfig {
+    var enabled = true
+    var port = 8765
+    var visibility = "same"             // same = 跟投影字幕条一起显示/隐藏；auto = 字幕时段内一直显示（投影上手动隐藏也照样显示）
+    var lines = 3                       // 原文 + 译文时：原文 1 行、译文 2 行
+    var heightPercent: Double = 15      // 占视频高度的百分比
+    var bottomPercent: Double = 4       // 离视频底边多远
+    var marginPercent: Double = 10      // 左右各留白多少
+    var background = "rgba(0,0,0,0.55)"
+    var color = "#ffffff"
 }
 
 struct PresenterConfig {
@@ -252,6 +270,7 @@ struct PresenterConfig {
     var caption = CaptionConfig()
     var gdrive = GDriveConfig()
     var glossary = GlossaryConfig()
+    var obs = OBSCaptionConfig()
 }
 
 enum Scene: Equatable {
@@ -957,48 +976,286 @@ window.setMode=function(m,t,o){mode=m;target=Number(t)||0;off=Number(o)||0;r()};
 </script></body></html>
 """
 
-// 字幕条：显示从翻译网页提取到的最新文字，底部对齐，只显示最后几行
-let captionHTML = #"""
-<!doctype html><html><head><meta charset="utf-8"><style>
-html,body{margin:0;height:100%;overflow:hidden;cursor:none;background:transparent}
-#box{position:fixed;top:0;right:0;bottom:0;left:0;box-sizing:border-box;padding:0 3vw;display:flex;flex-direction:column;justify-content:center}
-.clip{overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end}
-.t{color:#fff;font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue","PingFang SC",sans-serif;font-weight:600;overflow-wrap:break-word;word-wrap:break-word}
-.ph{opacity:.35;font-weight:400;text-align:center}
-#a{opacity:.8}
-</style></head><body><div id="box"><div id="clipA" class="clip"><div id="a" class="t"></div></div><div id="clipB" class="clip"><div id="b" class="t ph"></div></div></div><script>
-(function(){
-var clipA=document.getElementById('clipA'),clipB=document.getElementById('clipB'),a=document.getElementById('a'),b=document.getElementById('b');
-var ph='',lines=3,ta='',tb='';
-function layout(){
-  var h=window.innerHeight||200;var lh=Math.max(10,Math.floor(h*0.88/lines));
-  var la=0;
-  if(ta&&tb){la=lines>=2?Math.max(1,Math.floor(lines/3)):0;}else if(ta){la=lines;}
-  var lb=lines-la;
-  clipA.style.display=la?'flex':'none';clipA.style.height=(lh*la)+'px';
-  clipB.style.display=lb?'flex':'none';clipB.style.height=(lh*lb)+'px';
-  a.style.lineHeight=lh+'px';b.style.lineHeight=lh+'px';
-  a.style.fontSize=Math.floor(lh/1.22)+'px';
-  b.style.fontSize=Math.floor(lh/((ta||tb)?1.22:2))+'px';
-}
-function render(){
-  if(!ta&&!tb){b.className='t ph';b.textContent=ph;}else{b.className='t';if(b.textContent!==tb){b.textContent=tb;}}
-  if(a.textContent!==ta){a.textContent=ta;}
-  layout();
-}
-window.setStyle=function(fg,bg,n,placeholder){
-  a.style.color=fg;b.style.color=fg;document.documentElement.style.background=bg;document.body.style.background=bg;
-  var light=true;try{var m=getComputedStyle(b).color.match(/\d+(\.\d+)?/g);light=(0.299*m[0]+0.587*m[1]+0.114*m[2])>140;}catch(e){}
-  var sh=(String(bg).toLowerCase()==='transparent')?(light?'0 0 6px rgba(0,0,0,.95),0 0 2px #000':'0 0 6px rgba(255,255,255,.95),0 0 2px #fff'):'none';
-  a.style.textShadow=sh;b.style.textShadow=sh;
-  lines=Math.max(1,Number(n)||3);ph=placeholder;render();
-};
-window.setCaption=function(t){ta='';tb=t||'';render();};
-window.setCaption2=function(o,t){ta=o||'';tb=t||'';if(!tb&&ta){tb=ta;ta='';}render();};
-window.addEventListener('resize',layout);render();
+// 滚动字幕的显示程序（投影字幕条和 OBS 叠加页共用）：从左到右写，一行写满整行向上滚动，写完的行不再变动
+let captionRendererJS = #"""
+(function () {
+  'use strict';
+  // 滚动字幕：从左到右写，一行写满就整行向上滚动；已经写完的行不再变动
+  var box = document.getElementById('box');
+  var phEl = document.getElementById('ph');
+  var band = document.getElementById('band');
+  var cfg = { lines: 3, fg: '#ffffff', bg: 'transparent', ph: '', margin: -1, hideEmpty: false, shadow: '' };
+  var st = { e: -1, m: 'single', v: true };
+  var canvas = document.createElement('canvas');
+  var ctx = canvas.getContext('2d');
+  var FAMILY = '-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Helvetica Neue",Arial,sans-serif';
+  var CLOSE = '，。！？、；：,.!?;:…）)》」』”’%】';
+  var OPEN = '（(《「『“‘【';
+  var WORD = /[A-Za-z0-9À-ɏЀ-ӿ'’_\-]+[.,!?;:%)\]}"”’]*|\s+|[\s\S]/g;
+
+  function makeStream(id) {
+    var clip = document.createElement('div');
+    clip.className = 'clip';
+    var inner = document.createElement('div');
+    inner.className = 'inner t' + (id === 'a' ? ' orig' : '');
+    clip.appendChild(inner);
+    box.appendChild(clip);
+    return { id: id, clip: clip, el: inner, done: [], open: '', raw: '', tail: '', n: 0, lh: 0, w: 0,
+             font: '', total: -1, animK: 0, animUntil: 0, last: 0 };
+  }
+  var A = makeStream('a');   // 原文（本机识别）
+  var B = makeStream('b');   // 译文 / Kaleo
+
+  function width(s) { return ctx.measureText(s).width; }
+  function fit(s, w) {
+    var lo = 1, hi = s.length;
+    while (lo < hi) {
+      var mid = (lo + hi + 1) >> 1;
+      if (width(s.slice(0, mid)) <= w) { lo = mid; } else { hi = mid - 1; }
+    }
+    return lo;
+  }
+
+  // 把文字排成行：英文按单词换行，中文可以在任何字之间换行；标点不放在行首，开括号不留在行尾
+  function layout(x, text) {
+    var out = [], cur = '', toks = text.match(WORD) || [], w = x.w;
+    for (var i = 0; i < toks.length; i++) {
+      var t = toks[i];
+      if (/^\s+$/.test(t)) { if (cur && cur.charAt(cur.length - 1) !== ' ') { cur += ' '; } continue; }
+      if (!cur) { cur = t; }
+      else if (width(cur + t) <= w) { cur += t; continue; }
+      else if (t.length <= 2 && CLOSE.indexOf(t.charAt(0)) >= 0) { cur += t; continue; }
+      else {
+        var line = cur.replace(/\s+$/, ''), carry = '';
+        while (line.length > 1 && OPEN.indexOf(line.charAt(line.length - 1)) >= 0) {
+          carry = line.charAt(line.length - 1) + carry;
+          line = line.slice(0, -1);
+        }
+        out.push(line);
+        cur = carry + t;
+      }
+      while (cur.length > 1 && width(cur) > w) {
+        var k = fit(cur, w);
+        out.push(cur.slice(0, k));
+        cur = cur.slice(k);
+      }
+    }
+    return { lines: out, open: cur };
+  }
+
+  function addText(x, s) {
+    if (!s) { return; }
+    x.raw += s;
+    if (x.raw.length > 2400) { x.raw = x.raw.slice(-1600); }
+    if (!x.w) { return; }
+    ctx.font = x.font;
+    var r = layout(x, x.open + s);
+    for (var i = 0; i < r.lines.length; i++) { x.done.push(r.lines[i]); }
+    if (x.done.length > 40) { x.done.splice(0, x.done.length - 40); }
+    x.open = r.open;
+  }
+
+  function relayout(x) {
+    x.done = []; x.open = ''; x.total = -1;
+    if (!x.w || !x.raw) { return; }
+    ctx.font = x.font;
+    var r = layout(x, x.raw);
+    x.done = r.lines.slice(-40);
+    x.open = r.open;
+  }
+
+  function resetStream(x) {
+    x.done = []; x.open = ''; x.raw = ''; x.tail = ''; x.total = -1; x.last = 0; x.animUntil = 0;
+    x.el.innerHTML = '';
+    x.el.style.transition = 'none';
+    x.el.style.transform = 'translateY(0)';
+  }
+
+  function allLines(x) {
+    ctx.font = x.font;
+    var r = layout(x, x.open + x.tail);
+    var arr = x.done.concat(r.lines);
+    if (/\S/.test(r.open)) { arr.push(r.open); }
+    return arr;
+  }
+
+  function render(x) {
+    if (!x.n) { x.clip.style.display = 'none'; x.total = -1; return; }
+    x.clip.style.display = 'block';
+    var all = allLines(x), total = all.length, n = x.n, now = Date.now(), k = 0, extra = 0;
+    if (x.total >= 0 && total > x.total) { k = Math.min(total - x.total, n); }
+    x.total = total;
+    if (k > 0) { extra = k; } else if (now < x.animUntil) { extra = x.animK; }
+    var rows = all.slice(Math.max(0, total - n - extra));
+    var el = x.el;
+    while (el.childNodes.length < rows.length) {
+      var d = document.createElement('div');
+      d.className = 'ln';
+      el.appendChild(d);
+    }
+    while (el.childNodes.length > rows.length) { el.removeChild(el.firstChild); }
+    for (var i = 0; i < rows.length; i++) {
+      var c = el.childNodes[i];
+      if (c.textContent !== rows[i]) { c.textContent = rows[i]; }
+      c.style.height = x.lh + 'px';
+      c.style.lineHeight = x.lh + 'px';
+    }
+    if (k > 0) {
+      el.style.transition = 'none';
+      el.style.transform = 'translateY(' + (k * x.lh) + 'px)';
+      void el.offsetHeight;
+      el.style.transition = 'transform 320ms ease-out';
+      el.style.transform = 'translateY(0)';
+      x.animK = k;
+      x.animUntil = now + 340;
+    }
+  }
+
+  function hasText(x) { return x.n > 0 && x.total > 0; }
+
+  function updateVisibility() {
+    var any = hasText(A) || hasText(B);
+    if (phEl) {
+      phEl.textContent = cfg.ph;
+      phEl.style.display = (!any && cfg.ph) ? 'flex' : 'none';
+    }
+    var show = st.v && (any || !cfg.hideEmpty);
+    if (band) { band.style.opacity = show ? '1' : '0'; }
+    else { document.body.style.opacity = st.v ? '1' : '0'; }
+  }
+
+  function setStream(x, n, lh, fs, w) {
+    var font = '600 ' + fs + 'px ' + FAMILY;
+    var changed = x.lh !== lh || x.w !== w || x.font !== font;
+    x.n = n; x.lh = lh; x.w = w; x.font = font;
+    x.el.style.font = font;
+    x.clip.style.height = (n * lh) + 'px';
+    if (changed) { relayout(x); }
+  }
+
+  function layoutAll() {
+    if (cfg.margin >= 0) {
+      box.style.left = cfg.margin + '%';
+      box.style.right = cfg.margin + '%';
+    }
+    var H = box.clientHeight || window.innerHeight || 200;
+    var W = box.clientWidth || window.innerWidth || 800;
+    var lines = Math.max(1, cfg.lines), la = 0, lb = 0, m = st.m;
+    if (m === 'both') {
+      la = lines >= 2 ? Math.max(1, Math.floor(lines / 3)) : 0;
+      lb = lines - la;
+    } else if (m === 'original') {
+      la = lines;
+    } else {
+      lb = lines;
+    }
+    var lh = Math.max(10, Math.floor(H * 0.88 / lines));
+    var fs = Math.max(8, Math.floor(lh / 1.3));
+    setStream(A, la, lh, fs, W);
+    setStream(B, lb, lh, fs, W);
+    if (phEl) { phEl.style.fontSize = Math.floor(fs * 0.8) + 'px'; }
+    render(A); render(B); updateVisibility();
+  }
+
+  function applyStream(x, s) {
+    if (!s) { return; }
+    if (s.r) { x.done = []; x.open = ''; x.raw = ''; x.total = -1; }
+    var add = s.add || [];
+    for (var i = 0; i < add.length; i++) { addText(x, add[i]); }
+    x.tail = s.t || '';
+    if (typeof s.id === 'number') { x.last = s.id; }
+  }
+
+  // Presenter 送来的变化：e = 第几轮（变了就清空重来），m = 显示方式，v = 是否显示，
+  // a / b = 原文 / 译文：add = 新定下来的文字，t = 还会变的最后一段，id = 已收到第几段
+  window.capApply = function (d) {
+    if (!d) { return; }
+    if (d.e !== st.e) { st.e = d.e; resetStream(A); resetStream(B); }
+    var modeChanged = !!d.m && d.m !== st.m;
+    if (d.m) { st.m = d.m; }
+    st.v = d.v !== false;
+    applyStream(A, d.a);
+    applyStream(B, d.b);
+    if (modeChanged) { layoutAll(); } else { render(A); render(B); updateVisibility(); }
+  };
+
+  window.capState = function () { return { e: st.e, a: A.last, b: B.last }; };
+
+  window.capStyle = function (o) {
+    for (var k in o) { if (Object.prototype.hasOwnProperty.call(o, k)) { cfg[k] = o[k]; } }
+    box.style.color = cfg.fg;
+    if (phEl) { phEl.style.color = cfg.fg; }
+    if (!band) { document.documentElement.style.background = cfg.bg; document.body.style.background = cfg.bg; }
+    var sh = cfg.shadow;
+    if (!sh) {
+      var light = true;
+      try {
+        var mm = getComputedStyle(box).color.match(/\d+(\.\d+)?/g);
+        light = (0.299 * mm[0] + 0.587 * mm[1] + 0.114 * mm[2]) > 140;
+      } catch (e) {}
+      sh = String(cfg.bg).toLowerCase() === 'transparent'
+        ? (light ? '0 0 6px rgba(0,0,0,.95),0 0 2px #000' : '0 0 6px rgba(255,255,255,.95),0 0 2px #fff') : 'none';
+    }
+    box.style.textShadow = sh;
+    layoutAll();
+  };
+
+  window.addEventListener('resize', layoutAll);
+  layoutAll();
 })();
-</script></body></html>
 """#
+
+let captionPageCSS = #"""
+html,body{margin:0;height:100%;overflow:hidden;background:transparent}
+.clip{position:relative;overflow:hidden;flex:none}
+.inner{position:absolute;left:0;right:0;bottom:0;will-change:transform}
+.ln{white-space:pre;overflow:hidden;text-align:left}
+.t{font-weight:600}
+.orig{opacity:.78}
+"""#
+
+// 投影上的字幕条（左右留白由 caption.marginPercent 决定）
+let captionHTML = "<!doctype html><html><head><meta charset=\"utf-8\"><style>" + captionPageCSS + #"""
+body{cursor:none}
+#box{position:fixed;top:0;bottom:0;left:10%;right:10%;display:flex;flex-direction:column;justify-content:center}
+#ph{position:fixed;left:0;right:0;top:0;bottom:0;display:none;align-items:center;justify-content:center;opacity:.35;font-weight:400;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Helvetica Neue",Arial,sans-serif}
+</style></head><body><div id="box"></div><div id="ph"></div><script>
+"""# + captionRendererJS + "</script></body></html>"
+
+// OBS 浏览器来源用的字幕页：每 0.2 秒向 Presenter 取一次新文字；Presenter 没在运行时自动隐藏
+let obsPollJS = #"""
+(function () {
+  var fails = 0;
+  function poll() {
+    var s = capState();
+    fetch('/state?e=' + s.e + '&a=' + s.a + '&b=' + s.b, { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { fails = 0; capApply(d); setTimeout(poll, 200); })
+      .catch(function () {
+        fails++;
+        if (fails > 5) { var b = document.getElementById('band'); if (b) { b.style.opacity = '0'; } }
+        setTimeout(poll, 1000);
+      });
+  }
+  poll();
+})();
+"""#
+
+/// CSS 里用的颜色值：去掉会破坏样式的字符
+func cssValue(_ s: String) -> String {
+    return String(s.filter { !";{}<>\"\\".contains($0) })
+}
+
+func obsCaptionHTML(_ o: OBSCaptionConfig) -> String {
+    let band = "#band{position:fixed;left:\(o.marginPercent)%;right:\(o.marginPercent)%;bottom:\(o.bottomPercent)%;"
+        + "height:\(o.heightPercent)%;background:\(cssValue(o.background));border-radius:1.2vh;opacity:0;transition:opacity .4s}"
+        + "#box{position:absolute;left:3%;right:3%;top:0;bottom:0;display:flex;flex-direction:column;justify-content:center}"
+    let style = "{fg:\(jsString(o.color)),bg:'transparent',lines:\(o.lines),ph:'',margin:-1,hideEmpty:true,"
+        + "shadow:'0 0 4px rgba(0,0,0,.85),0 0 1px #000'}"
+    return "<!doctype html><html><head><meta charset=\"utf-8\"><title>Presenter 字幕</title><style>" + captionPageCSS + band
+        + "</style></head><body><div id=\"band\"><div id=\"box\"></div></div><script>" + captionRendererJS
+        + "\ncapStyle(\(style));\n" + obsPollJS + "</script></body></html>"
+}
 
 // 注入到翻译网页里的脚本：找出“正在更新的文字列表”，把最新几段文字发给 Presenter
 // __SELECTOR__ 会被替换成 config.json 里的 caption.textSelector（为空时自动寻找）
@@ -1973,6 +2230,226 @@ func englishNameCandidates(_ text: String) -> [String] {
 
 typealias ReviewTranslate = (String) async -> String?
 
+// MARK: - 字幕数据（投影字幕条和 OBS 叠加共用）
+//
+// 每路字幕 = 已经定下来的文字（一段一段追加，不再改）+ 最后一段还会变的文字（tail）。
+// 显示端只需要拿“上次之后新增的段落”和最新的 tail，已经显示好的行就不会重排。
+
+/// 本机识别送出来的字幕变化
+enum CaptionEvent {
+    case committed(String)      // 一段原文定下来了
+    case volatile(String)       // 正在说的原文（还会变）
+    case translation(String)    // 一句译文
+    case clear                  // 清空（开始识别、长时间没人说话）
+}
+
+final class CaptionStream {
+    private(set) var chunks: [(id: Int, text: String)] = []
+    private(set) var lastId = 0
+    private(set) var tail = ""
+    var hasCommitted: Bool { return !chunks.isEmpty }
+
+    func append(_ s: String) {
+        guard !s.isEmpty else { return }
+        lastId += 1
+        chunks.append((id: lastId, text: s))
+        if chunks.count > 400 { chunks.removeFirst(chunks.count - 400) }
+    }
+
+    func setTail(_ s: String) { tail = s }
+
+    func clear() {
+        chunks = []
+        tail = ""
+    }
+
+    /// since 之后新增的段落；since 太旧（或显示端刚打开）就给全部，r = true 表示显示端先清空
+    func delta(since: Int) -> [String: Any] {
+        let fresh = since <= 0 || since > lastId || (chunks.first.map { since < $0.id - 1 } ?? false)
+        let add = fresh ? chunks.map { $0.text } : chunks.filter { $0.id > since }.map { $0.text }
+        return ["r": fresh, "add": add, "t": tail, "id": lastId]
+    }
+}
+
+final class CaptionFeed {
+    private(set) var epoch = 1
+    let a = CaptionStream()     // 原文（本机识别）
+    let b = CaptionStream()     // 译文；Kaleo 的文字也放这里
+
+    func reset() {
+        epoch += 1
+        a.clear()
+        b.clear()
+    }
+
+    /// 给某个显示端的变化：它上次收到的是第 e 轮、a/b 各到第几段
+    func delta(epoch e: Int, a sa: Int, b sb: Int, mode: String, visible: Bool) -> [String: Any] {
+        let same = e == epoch
+        return ["e": epoch, "m": mode, "v": visible,
+                "a": a.delta(since: same ? sa : 0), "b": b.delta(since: same ? sb : 0)]
+    }
+}
+
+/// Kaleo 网页给的是“最近约 400 字”的滑动窗口：接到已有文字后面，较早的部分定下来，最后约 40 字还可能改
+final class SnapshotMerger {
+    private var committed = ""
+    private var tail = ""
+    let keep = 40
+
+    func reset() {
+        committed = ""
+        tail = ""
+    }
+
+    /// snap 应该接在已有文字的哪里：从最早可能的位置找起，第一个“一直对到末尾”的位置就是；
+    /// 都对不到末尾（最后几个字被网页改过）就取对上最多字的位置；找不到返回 -1
+    static func align(_ cs: [Character], _ ss: [Character]) -> Int {
+        guard let s0 = ss.first else { return -1 }
+        let k = min(8, ss.count)
+        let lo = max(0, cs.count - ss.count - 20)
+        var best = -1
+        var bestL = 0
+        var p = lo
+        while p < cs.count {
+            if cs[p] == s0 {
+                var l = 0
+                while p + l < cs.count && l < ss.count && cs[p + l] == ss[l] { l += 1 }
+                if p + l == cs.count && (l >= min(k, cs.count) || l == ss.count) { return p }
+                if l >= min(k, 6) && l > bestL {
+                    bestL = l
+                    best = p
+                }
+            }
+            p += 1
+        }
+        return best
+    }
+
+    func merge(_ snap: String) -> (append: String, tail: String) {
+        guard !snap.isEmpty else { return ("", tail) }
+        let combined = committed + tail
+        let merged: String
+        if combined.isEmpty {
+            merged = snap
+        } else {
+            let cs = Array(combined)
+            let p = SnapshotMerger.align(cs, Array(snap))
+            merged = p >= 0 ? String(cs[0..<p]) + snap : combined + " " + snap   // 接不上（网页重新载入等）：当作新的一段
+        }
+        var newTail = merged.hasPrefix(committed) ? String(merged.dropFirst(committed.count))
+                                                  : String(merged.dropFirst(min(committed.count, merged.count)))
+        var append = ""
+        if newTail.count > keep {
+            var cut = newTail.index(newTail.endIndex, offsetBy: -keep)
+            if let sp = newTail[..<cut].lastIndex(of: " "), newTail.distance(from: sp, to: cut) < 20 {
+                cut = newTail.index(after: sp)
+            }
+            append = String(newTail[..<cut])
+            newTail = String(newTail[cut...])
+        }
+        committed += append
+        if committed.count > 1200 { committed = String(committed.suffix(1200)) }
+        tail = newTail
+        return (append, newTail)
+    }
+}
+
+/// 只在本机（127.0.0.1）提供字幕页的极简网页服务，给 OBS 的“浏览器”来源用
+final class CaptionServer {
+    let port: UInt16
+    var handler: ((String, [String: String]) -> (status: Int, type: String, body: Data))?
+    private(set) var state = "未启动"
+    private var listener: NWListener?
+
+    init(port: UInt16) {
+        self.port = port
+    }
+
+    var url: String { return "http://127.0.0.1:\(port)/caption" }
+
+    func start() {
+        guard listener == nil else { return }
+        guard let p = NWEndpoint.Port(rawValue: port) else {
+            state = "⚠️ 端口不对：\(port)"
+            return
+        }
+        let params = NWParameters.tcp
+        params.allowLocalEndpointReuse = true
+        params.requiredInterfaceType = .loopback
+        do {
+            let l = try NWListener(using: params, on: p)
+            l.stateUpdateHandler = { [weak self] st in
+                guard let self = self else { return }
+                switch st {
+                case .ready:
+                    self.state = "✅ \(self.url)"
+                    writeLog("OBS 字幕页：\(self.url)")
+                case .failed(let e):
+                    self.state = "⚠️ 无法启动：\(e.localizedDescription)（端口 \(self.port) 可能被占用）"
+                    writeLog("⚠️ OBS 字幕页无法启动：\(e.localizedDescription)")
+                    self.listener?.cancel()
+                    self.listener = nil
+                default:
+                    break
+                }
+            }
+            l.newConnectionHandler = { [weak self] c in self?.accept(c) }
+            l.start(queue: .main)
+            listener = l
+            state = "启动中…"
+        } catch {
+            state = "⚠️ 无法启动：\(error.localizedDescription)"
+            writeLog("⚠️ OBS 字幕页无法启动：\(error.localizedDescription)")
+        }
+    }
+
+    func stop() {
+        listener?.cancel()
+        listener = nil
+    }
+
+    private func accept(_ c: NWConnection) {
+        c.start(queue: .main)
+        receive(c, buffer: Data())
+    }
+
+    private func receive(_ c: NWConnection, buffer: Data) {
+        c.receive(minimumIncompleteLength: 1, maximumLength: 16384) { [weak self] data, _, isComplete, error in
+            guard let self = self else {
+                c.cancel()
+                return
+            }
+            var buf = buffer
+            if let d = data { buf.append(d) }
+            if let r = buf.range(of: Data("\r\n\r\n".utf8)) {
+                self.respond(c, head: String(decoding: buf[buf.startIndex..<r.lowerBound], as: UTF8.self))
+            } else if error != nil || isComplete || buf.count > 65536 {
+                c.cancel()
+            } else {
+                self.receive(c, buffer: buf)
+            }
+        }
+    }
+
+    private func respond(_ c: NWConnection, head: String) {
+        let first = head.components(separatedBy: "\r\n").first ?? ""
+        let parts = first.split(separator: " ")
+        var path = "/"
+        var query: [String: String] = [:]
+        if parts.count >= 2, let comps = URLComponents(string: String(parts[1])) {
+            path = comps.path
+            for item in comps.queryItems ?? [] { query[item.name] = item.value ?? "" }
+        }
+        let r = handler?(path, query) ?? (status: 404, type: "text/plain; charset=utf-8", body: Data("not found".utf8))
+        var header = "HTTP/1.1 \(r.status) " + (r.status == 200 ? "OK" : "Not Found") + "\r\n"
+        header += "Content-Type: \(r.type)\r\nContent-Length: \(r.body.count)\r\nCache-Control: no-store\r\n"
+        header += "Access-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n"
+        var out = Data(header.utf8)
+        out.append(r.body)
+        c.send(content: out, completion: .contentProcessed { _ in c.cancel() })
+    }
+}
+
 // MARK: - 本机实时字幕：Apple 语音识别 + Apple 翻译（需要 macOS 26，并用 Xcode 26 编译）
 
 func languageName(_ id: String) -> String {
@@ -1996,6 +2473,10 @@ protocol LiveRecognizer: AnyObject {
     var onUpdate: ((String, String) -> Void)? { get set }   // 原文、译文
     var onStatus: ((String) -> Void)? { get set }
     var onRecord: ((CaptionRecord) -> Void)? { get set }    // 每一句（写字幕记录）
+    var onCaption: ((CaptionEvent) -> Void)? { get set }    // 字幕变化（滚动字幕用）
+    var autoPunctuation: String { get set }     // 按停顿补标点：zh | all | off
+    var pauseComma: Double { get set }          // 停顿几秒补逗号
+    var pausePeriod: Double { get set }         // 停顿几秒补句号
     func start(language: String, target: String, device: String, channel: Int)
     func stop()
     func clearIfIdle(after seconds: TimeInterval)
@@ -2012,6 +2493,84 @@ struct LiveCaptionError: LocalizedError {
 /// 转换音频时，每段音频只交给转换器一次
 final class OnceFlag {
     var used = false
+}
+
+/// 音频线程记下“安静”的时段（秒，从开始识别算起，和识别结果里的时间对得上），用来按停顿补标点。
+/// 安静的标准随现场音量自动调整：取最近约半分钟音量的低处和高处的中间
+final class PauseTracker {
+    private let lock = NSLock()
+    private var seconds: Double = 0
+    private var silences: [(start: Double, end: Double)] = []
+    private var quietSince: Double?
+    private var levels: [Float] = []
+    private var threshold: Float = -200
+
+    func reset() {
+        lock.lock()
+        defer { lock.unlock() }
+        seconds = 0
+        silences = []
+        quietSince = nil
+        levels = []
+        threshold = -200
+    }
+
+    /// 音频线程：每一段送进识别器的声音
+    func feed(_ buf: AVAudioPCMBuffer) {
+        let n = Int(buf.frameLength)
+        let sr = buf.format.sampleRate
+        guard n > 0, sr > 0 else { return }
+        var sum: Double = 0
+        if let f = buf.floatChannelData {
+            let ch = f[0]
+            for i in 0..<n {
+                let v = Double(ch[i])
+                sum += v * v
+            }
+        } else if let d = buf.int16ChannelData {
+            let ch = d[0]
+            for i in 0..<n {
+                let v = Double(ch[i]) / 32768.0
+                sum += v * v
+            }
+        }
+        let rms = (sum / Double(n)).squareRoot()
+        let db = Float(20 * log10(max(rms, 1e-7)))
+        lock.lock()
+        defer { lock.unlock() }
+        let t0 = seconds
+        seconds += Double(n) / sr
+        levels.append(db)
+        if levels.count > 400 { levels.removeFirst(levels.count - 400) }
+        if levels.count >= 30 {
+            let sorted = levels.sorted()
+            let low = max(sorted[sorted.count / 10], -80)
+            let high = sorted[sorted.count * 7 / 10]
+            threshold = high - low >= 12 ? (low + high) / 2 : -200    // 音量高低差不多（一直在放音乐等）：不判断停顿
+        }
+        if db < threshold {
+            if quietSince == nil { quietSince = t0 }
+        } else if let q = quietSince {
+            silences.append((start: q, end: t0))
+            if silences.count > 400 { silences.removeFirst(silences.count - 400) }
+            quietSince = nil
+        }
+    }
+
+    /// 和 [from, to] 重叠的安静时段（正在安静的算到现在）
+    func quiet(from: Double, to: Double) -> [(start: Double, end: Double)] {
+        lock.lock()
+        defer { lock.unlock() }
+        var out = silences.filter { $0.end > from && $0.start < to }
+        if let q = quietSince, q < to { out.append((start: q, end: seconds)) }
+        return out
+    }
+
+    var now: Double {
+        lock.lock()
+        defer { lock.unlock() }
+        return seconds
+    }
 }
 
 /// 建立 Apple 翻译会话（本机识别和字幕复查共用）
@@ -2069,6 +2628,15 @@ final class LiveCaptionEngine: LiveRecognizer {
     var onUpdate: ((String, String) -> Void)?
     var onStatus: ((String) -> Void)?
     var onRecord: ((CaptionRecord) -> Void)?
+    var onCaption: ((CaptionEvent) -> Void)?
+    var autoPunctuation = "zh"
+    var pauseComma: Double = 0.3
+    var pausePeriod: Double = 0.8
+
+    private let pauses = PauseTracker()
+    private var lastFinalEnd: Double = -1       // 上一段原文最后一个词结束的时间（秒）
+    private var lastFinalText = ""
+    private var timingLogged = false
 
     /// 等着翻译的一句
     private struct PendingUnit {
@@ -2121,6 +2689,10 @@ final class LiveCaptionEngine: LiveRecognizer {
         translations = []
         volatileText = ""
         lastActivity = Date()
+        lastFinalEnd = -1
+        lastFinalText = ""
+        timingLogged = false
+        onCaption?(.clear)
         publish()
         setStatus("启动中…")
         startTask = Task { @MainActor in
@@ -2192,6 +2764,8 @@ final class LiveCaptionEngine: LiveRecognizer {
             finals = []
             translations = []
             volatileText = ""
+            lastFinalText = ""
+            onCaption?(.clear)
             publish()
         }
     }
@@ -2214,7 +2788,8 @@ final class LiveCaptionEngine: LiveRecognizer {
         guard let locale = await SpeechTranscriber.supportedLocale(equivalentTo: Locale(identifier: language)) else {
             throw LiveCaptionError(message: "本机识别不支持\(languageName(language))")
         }
-        let transcriber = SpeechTranscriber(locale: locale, preset: .progressiveTranscription)
+        // 带每个词的时间（按停顿补标点用）
+        let transcriber = SpeechTranscriber(locale: locale, preset: .timeIndexedProgressiveTranscription)
         let installed = await SpeechTranscriber.installedLocales
         let isInstalled = installed.contains { $0.identifier(.bcp47) == locale.identifier(.bcp47) }
         if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
@@ -2243,6 +2818,7 @@ final class LiveCaptionEngine: LiveRecognizer {
         guard gen == generation else { return }
 
         // 4. 音频输入
+        pauses.reset()
         let engine = AVAudioEngine()
         let picked = Self.selectInput(engine: engine, wanted: device)
         try startAudio(engine)
@@ -2265,7 +2841,11 @@ final class LiveCaptionEngine: LiveRecognizer {
         // 5. 结果
         for try await result in transcriber.results {
             if gen != generation { return }
-            handle(String(result.text.characters), isFinal: result.isFinal)
+            if result.isFinal {
+                handle(punctuated(result.text), isFinal: true)
+            } else {
+                handle(String(result.text.characters), isFinal: false)
+            }
         }
         if gen == generation {
             throw LiveCaptionError(message: "识别意外结束，稍后自动重新开始")
@@ -2287,7 +2867,7 @@ final class LiveCaptionEngine: LiveRecognizer {
         }
         Self.configure(converter, channel: channel, inputChannels: inFormat.channelCount)
         e.inputNode.installTap(onBus: 0, bufferSize: 4096, format: inFormat,
-                               block: Self.makeTap(converter: converter, format: format, continuation: cont))
+                               block: Self.makeTap(converter: converter, format: format, continuation: cont, pauses: pauses))
         e.prepare()
         try e.start()
     }
@@ -2320,6 +2900,7 @@ final class LiveCaptionEngine: LiveRecognizer {
             volatileText = ""
             if !t.isEmpty {
                 let shown = glossary?.correct(t, language: language).text ?? t
+                onCaption?(.committed(shown))
                 finals.append(shown)
                 if finals.count > 30 { finals.removeFirst(finals.count - 30) }
                 if buffer.isEmpty { bufferStart = Date() }
@@ -2331,7 +2912,104 @@ final class LiveCaptionEngine: LiveRecognizer {
             // 还在变的文字：只按术语表改（读音纠正等这一段定下来再做）
             volatileText = glossary?.correct(t, language: language, fuzzyOK: false).text ?? t
         }
+        onCaption?(.volatile(volatileText))
         publish()
+    }
+
+    /// 按停顿补标点：识别结果里有每个词的时间，再对照音频里安静的时段，
+    /// 词与词之间停顿超过 pauseComma 秒补逗号，超过 pausePeriod 秒补句号（英文 , .）。已有标点的地方不补
+    private func punctuated(_ text: AttributedString) -> String {
+        let plain = String(text.characters)
+        let zh = language.hasPrefix("zh")
+        guard autoPunctuation == "all" || (autoPunctuation == "zh" && zh) else { return plain }
+        var pieces: [(s: String, a: Double, b: Double)] = []
+        for run in text.runs {
+            let piece = String(text[run.range].characters)
+            if let r = run.audioTimeRange {
+                pieces.append((s: piece, a: r.start.seconds, b: r.end.seconds))
+            } else if pieces.isEmpty {
+                pieces.append((s: piece, a: -1, b: -1))
+            } else {
+                pieces[pieces.count - 1].s += piece
+            }
+        }
+        let comma = zh ? "，" : ","
+        let period = zh ? "。" : "."
+        let timedIdx = pieces.indices.filter { pieces[$0].a >= 0 && pieces[$0].b >= pieces[$0].a }
+        guard let fi = timedIdx.first, let li = timedIdx.last else {
+            // 没有时间信息：只在两段之间补逗号
+            if !timingLogged {
+                timingLogged = true
+                writeLog("本机识别：识别结果没有词的时间，只在每段之间补逗号")
+            }
+            var out = plain
+            if zh && !lastFinalText.isEmpty && !Self.endsWithPunct(lastFinalText) && !Self.startsWithPunct(plain) {
+                out = comma + plain
+            }
+            lastFinalText = out
+            return out
+        }
+        if !timingLogged {
+            timingLogged = true
+            writeLog(String(format: "本机识别：按停顿补标点（这段的词在 %.1f–%.1f 秒，音频已到 %.1f 秒）",
+                            pieces[fi].a, pieces[li].b, pauses.now))
+        }
+        // 可以补标点的位置：-1 = 这段开头（和上一段之间），i = 第 i 个词后面；值 = (时间, 停顿秒数)
+        var bounds: [Int: (t: Double, p: Double)] = [:]
+        let first = pieces[fi]
+        if lastFinalEnd >= 0, !lastFinalText.isEmpty, !Self.endsWithPunct(lastFinalText), !Self.startsWithPunct(plain) {
+            bounds[-1] = (t: (lastFinalEnd + first.a) / 2, p: max(0, first.a - lastFinalEnd))
+        }
+        for j in 0..<max(0, timedIdx.count - 1) {
+            let i = timedIdx[j]
+            let k = timedIdx[j + 1]
+            guard k == i + 1 else { continue }
+            bounds[i] = (t: (pieces[i].b + pieces[k].a) / 2, p: max(0, pieces[k].a - pieces[i].b))
+        }
+        // 每段安静的时间算给离它最近的那个位置（停顿常被算进前一个或后一个词的时长里）
+        if !bounds.isEmpty {
+            for q in pauses.quiet(from: first.a - 3, to: pieces[li].b) {
+                let d = q.end - q.start
+                guard d >= pauseComma else { continue }
+                var best: Int?
+                var bestDist = Double.greatestFiniteMagnitude
+                for (key, v) in bounds {
+                    let dist = (v.t >= q.start - 0.05 && v.t <= q.end + 0.05) ? 0 : min(abs(v.t - q.start), abs(v.t - q.end))
+                    if dist < bestDist {
+                        bestDist = dist
+                        best = key
+                    }
+                }
+                if let key = best, bestDist <= 0.25, let v = bounds[key] {
+                    bounds[key] = (t: v.t, p: max(v.p, d))
+                }
+            }
+        }
+        let commaAt = pauseComma
+        let periodAt = pausePeriod
+        func mark(_ p: Double) -> String {
+            return p >= periodAt ? period : (p >= commaAt ? comma : "")
+        }
+        var out = ""
+        if let v = bounds[-1] {
+            let m = mark(v.p)
+            out += m
+            if !zh && !m.isEmpty && !(plain.first?.isWhitespace ?? false) { out += " " }
+        }
+        for i in pieces.indices {
+            out += pieces[i].s
+            guard let v = bounds[i], i + 1 < pieces.count, !Self.endsWithPunct(out),
+                  !Self.startsWithPunct(pieces[i + 1].s) else { continue }
+            let m = mark(v.p)
+            if m.isEmpty { continue }
+            // 英文：标点紧跟单词，放在空格前面
+            let trimmed = out.replacingOccurrences(of: "\\s+$", with: "", options: .regularExpression)
+            let spaces = String(out.dropFirst(trimmed.count))
+            out = trimmed + m + spaces
+        }
+        lastFinalEnd = pieces[li].b
+        lastFinalText = out
+        return out
     }
 
     /// 整句翻译：一句说完（句号、问号…）、停顿、或等太久，就把攒着的几段一起送去翻译。不是整句模式就每段马上送
@@ -2341,8 +3019,23 @@ final class LiveCaptionEngine: LiveRecognizer {
         let now = Date()
         let paused = volatileText.isEmpty && now.timeIntervalSince(lastFinal) >= sentencePause
         let tooLong = now.timeIntervalSince(bufferStart) >= sentenceMaxSeconds
-        if !sentenceMode || Self.endsSentence(joined) || paused || tooLong {
+        if !sentenceMode || Self.endsSentence(joined) || paused {
             flushBuffer()
+            return
+        }
+        if tooLong {
+            // 太长还没有句号：在最后一个逗号处断开，前面送去翻译，后面留着接下一段
+            if let cut = Self.clauseBreak(joined) {
+                let rest = String(joined.dropFirst(cut)).trimmingCharacters(in: .whitespaces)
+                buffer = [String(joined.prefix(cut))]
+                flushBuffer()
+                if !rest.isEmpty {
+                    buffer = [rest]
+                    bufferStart = Date()
+                }
+            } else {
+                flushBuffer()
+            }
             return
         }
         if !flushScheduled {
@@ -2358,9 +3051,12 @@ final class LiveCaptionEngine: LiveRecognizer {
 
     private func flushBuffer() {
         guard !buffer.isEmpty else { return }
-        let raw = Self.join(buffer, zh: language.hasPrefix("zh"))
+        var raw = Self.join(buffer, zh: language.hasPrefix("zh"))
         let time = bufferStart
         buffer = []
+        // 段首补的标点（属于上一句的结尾）不送去翻译
+        while let f = raw.first, Self.punctuationChars.contains(f) || f == " " { raw.removeFirst() }
+        guard !raw.isEmpty else { return }
         let c = glossary?.correct(raw, language: language) ?? (text: raw, fixes: [CaptionFix]())
         guard translator != nil else {
             onRecord?(CaptionRecord(time: time, language: language, raw: raw, fixed: c.text, fixes: c.fixes,
@@ -2425,6 +3121,7 @@ final class LiveCaptionEngine: LiveRecognizer {
             guard gen == self.generation else { return }
             if !t.isEmpty {
                 self.noteDuration(secs)
+                self.onCaption?(.translation(t))
                 self.translations.append(t)
                 if self.translations.count > 30 { self.translations.removeFirst(self.translations.count - 30) }
                 self.publish()
@@ -2472,6 +3169,31 @@ final class LiveCaptionEngine: LiveRecognizer {
 
     static func join(_ parts: [String], zh: Bool) -> String {
         return parts.joined(separator: zh ? "" : " ")
+    }
+
+    static let punctuationChars: Set<Character> = Set("，。！？、；：,.!?;:…—”’）)》」』")
+
+    static func endsWithPunct(_ s: String) -> Bool {
+        guard let c = s.trimmingCharacters(in: .whitespaces).last else { return true }
+        return punctuationChars.contains(c)
+    }
+
+    static func startsWithPunct(_ s: String) -> Bool {
+        guard let c = s.trimmingCharacters(in: .whitespaces).first else { return true }
+        return punctuationChars.contains(c)
+    }
+
+    /// 最后一个逗号（分号、冒号）后面的位置；逗号太靠前（前 30%）不算
+    static func clauseBreak(_ s: String) -> Int? {
+        let chars = Array(s)
+        var i = chars.count - 1
+        while i > 0 {
+            if "，,；;：:".contains(chars[i]) {
+                return Double(i) >= Double(chars.count) * 0.3 && i + 1 < chars.count ? i + 1 : nil
+            }
+            i -= 1
+        }
+        return nil
     }
 
     /// 以句号、问号、感叹号等结尾（后面的引号、括号不算）
@@ -2595,7 +3317,7 @@ final class LiveCaptionEngine: LiveRecognizer {
 
     /// 音频线程里：把每段声音转换成识别模型要的格式，送进识别器
     static func makeTap(converter: AVAudioConverter, format: AVAudioFormat,
-                        continuation: AsyncStream<AnalyzerInput>.Continuation) -> AVAudioNodeTapBlock {
+                        continuation: AsyncStream<AnalyzerInput>.Continuation, pauses: PauseTracker) -> AVAudioNodeTapBlock {
         return { buffer, _ in
             let ratio = format.sampleRate / buffer.format.sampleRate
             let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 64
@@ -2612,6 +3334,7 @@ final class LiveCaptionEngine: LiveRecognizer {
                 return buffer
             }
             if status == .error || out.frameLength == 0 { return }
+            pauses.feed(out)
             continuation.yield(AnalyzerInput(buffer: out))
         }
     }
@@ -2693,6 +3416,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
     var captionTo: HMSTime?
     var captionVisible = false
     var captionPageLoaded = false
+    let captionFeed = CaptionFeed()             // 滚动字幕的文字（投影和 OBS 共用）
+    let kaleoMerger = SnapshotMerger()
+    var projectorSent = (e: 0, a: 0, b: 0)      // 投影字幕条已经收到的进度
+    var captionPushPending = false
+    var captionServer: CaptionServer?
+    var obsLastPoll: Date?
     var sourceRequested = false
     var sourceState = "未载入"
     var sourceRetryAt: Date?
@@ -2843,6 +3572,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
             startGDriveFetch(pdfKeys(), force: false, reason: "启动时下载今天的 PDF", announce: true)
             startTermsFetch()
         }
+        startCaptionServer()
         logSummary()
         periodicChecks()
 
@@ -2858,6 +3588,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
 
     func applicationWillTerminate(_ notification: Notification) {
         recognizer?.stop()
+        captionServer?.stop()
         hotKeys.unregisterAll()
         if let a = activity { ProcessInfo.processInfo.endActivity(a) }
         writeLog("===== Presenter 退出 =====")
@@ -3008,13 +3739,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
                 if let v = a["sentencePauseSeconds"] as? Double, v >= 0.3, v <= 10 { cfg.caption.apple.sentencePauseSeconds = v }
                 if let v = a["translationQuality"] as? String { cfg.caption.apple.translationQuality = v.lowercased() == "fast" ? "fast" : "high" }
                 if let v = a["saveTranscript"] as? Bool { cfg.caption.apple.saveTranscript = v }
+                if let v = a["autoPunctuation"] as? String, ["zh", "all", "off"].contains(v) { cfg.caption.apple.autoPunctuation = v }
+                if let v = a["pauseComma"] as? Double, v >= 0.1, v <= 3 { cfg.caption.apple.pauseComma = v }
+                if let v = a["pausePeriod"] as? Double, v >= 0.2, v <= 5 { cfg.caption.apple.pausePeriod = v }
             }
+            if let v = c["marginPercent"] as? Double, v >= 0, v <= 30 { cfg.caption.marginPercent = v }
             if let v = c["textSelector"] as? String { cfg.caption.textSelector = v.trimmingCharacters(in: .whitespaces) }
             if let v = c["color"] as? String, !v.isEmpty { cfg.caption.color = v }
             if let v = c["background"] as? String, !v.isEmpty { cfg.caption.background = v }
             if let v = c["overlay"] as? Bool { cfg.caption.overlay = v }
             if let v = c["pageZoom"] as? Double, v > 0 { cfg.caption.pageZoom = v }
             if let v = c["reloadIfStaleMinutes"] as? Double, v >= 0 { cfg.caption.reloadIfStaleMinutes = v }
+        }
+        if let o = obj["obs"] as? [String: Any] {
+            if let v = o["enabled"] as? Bool { cfg.obs.enabled = v }
+            if let v = o["port"] as? Int, v >= 1024, v <= 65535 { cfg.obs.port = v }
+            if let v = o["visibility"] as? String, v == "same" || v == "auto" { cfg.obs.visibility = v }
+            if let v = o["lines"] as? Int, v >= 1, v <= 6 { cfg.obs.lines = v }
+            if let v = o["heightPercent"] as? Double, v >= 5, v <= 50 { cfg.obs.heightPercent = v }
+            if let v = o["bottomPercent"] as? Double, v >= 0, v <= 50 { cfg.obs.bottomPercent = v }
+            if let v = o["marginPercent"] as? Double, v >= 0, v <= 30 { cfg.obs.marginPercent = v }
+            if let v = o["background"] as? String, !v.isEmpty { cfg.obs.background = v }
+            if let v = o["color"] as? String, !v.isEmpty { cfg.obs.color = v }
         }
         if let g = obj["glossary"] as? [String: Any] {
             if let v = g["enabled"] as? Bool { cfg.glossary.enabled = v }
@@ -3317,6 +4063,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
             applySourceMode()
         } else if wv === captionView {
             captionPageLoaded = true
+            projectorSent = (e: 0, a: 0, b: 0)
             applyCaptionStyle()
             refreshCaptionDisplay()
         } else {
@@ -4093,7 +4840,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
                     captionTextAt = appNow()
                     captionActivity = appNow()
                 }
-                pushCaption(t)
+                kaleoCaption(t)
             }
         } else if type == "status" {
             let path = (body["path"] as? String) ?? ""
@@ -4105,31 +4852,120 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         }
     }
 
-    func pushCaption(_ t: String) {
-        if captionSource == "kaleo" { refreshCaptionDisplay() }
+    /// Kaleo 网页的最新文字（滑动窗口）→ 接到滚动字幕后面
+    func kaleoCaption(_ t: String) {
+        guard captionSource == "kaleo" else { return }
+        let m = kaleoMerger.merge(t)
+        captionFeed.b.append(m.append)
+        captionFeed.b.setTail(m.tail)
+        scheduleCaptionPush()
+    }
+
+    /// 本机识别的字幕变化 → 滚动字幕（英文段落之间加空格，中文不加）
+    func appleCaption(_ ev: CaptionEvent) {
+        guard captionSource == "apple" else { return }
+        let origEnglish = !appleLanguage.hasPrefix("zh")
+        switch ev {
+        case .clear:
+            captionFeed.reset()
+        case .committed(let s):
+            captionFeed.a.append(spaced(s, after: captionFeed.a, english: origEnglish))
+            captionFeed.a.setTail("")
+        case .volatile(let s):
+            captionFeed.a.setTail(s.isEmpty ? "" : spaced(s, after: captionFeed.a, english: origEnglish))
+        case .translation(let s):
+            captionFeed.b.append(spaced(s, after: captionFeed.b, english: appleTargetFor(appleLanguage).hasPrefix("en")))
+        }
+        scheduleCaptionPush()
+    }
+
+    func spaced(_ s: String, after st: CaptionStream, english: Bool) -> String {
+        guard english, st.hasCommitted, let f = s.first, !f.isWhitespace, !",.;:!?".contains(f) else { return s }
+        return " " + s
+    }
+
+    /// 字幕显示方式：single（Kaleo）| both | original | translation
+    func captionModeFor(_ display: String) -> String {
+        if captionSource != "apple" { return "single" }
+        if appleTargetFor(appleLanguage).isEmpty || recognizer?.translationProblem != nil { return "original" }
+        switch display {
+        case "original": return "original"
+        case "translation": return "translation"
+        default: return "both"
+        }
+    }
+
+    /// 字幕有变化：这一轮事件处理完后推给投影字幕条（同一轮里多次变化只推一次）
+    func scheduleCaptionPush() {
+        if captionPushPending { return }
+        captionPushPending = true
+        DispatchQueue.main.async {
+            self.captionPushPending = false
+            self.pushCaptionToProjector()
+        }
+    }
+
+    func pushCaptionToProjector() {
+        guard captionPageLoaded else { return }
+        let d = captionFeed.delta(epoch: projectorSent.e, a: projectorSent.a, b: projectorSent.b,
+                                  mode: captionModeFor(appleDisplay), visible: true)
+        projectorSent = (e: captionFeed.epoch, a: captionFeed.a.lastId, b: captionFeed.b.lastId)
+        guard let data = try? JSONSerialization.data(withJSONObject: d, options: []),
+              let json = String(data: data, encoding: .utf8) else { return }
+        captionView.evaluateJavaScript("window.capApply && window.capApply(\(json))", completionHandler: nil)
     }
 
     /// 把当前字幕来源的文字显示到字幕条
     func refreshCaptionDisplay() {
-        guard captionPageLoaded else { return }
-        let js: String
-        if captionSource == "apple" {
-            let o = appleOriginal
-            var t = appleTranslation
-            let noTranslation = appleTargetFor(appleLanguage).isEmpty || recognizer?.translationProblem != nil
-            if noTranslation { t = "" }
-            switch appleDisplay {
-            case "original":
-                js = "window.setCaption && window.setCaption(\(jsString(o)))"
-            case "translation":
-                js = "window.setCaption && window.setCaption(\(jsString(noTranslation ? o : t)))"
-            default:
-                js = "window.setCaption2 && window.setCaption2(\(jsString(o)), \(jsString(t)))"
-            }
-        } else {
-            js = "window.setCaption && window.setCaption(\(jsString(captionText)))"
+        scheduleCaptionPush()
+    }
+
+    // MARK: OBS 字幕叠加
+
+    func startCaptionServer() {
+        guard cfg.obs.enabled, captionServer == nil else { return }
+        let server = CaptionServer(port: UInt16(cfg.obs.port))
+        server.handler = { [weak self] path, query in
+            guard let self = self else { return (status: 404, type: "text/plain", body: Data()) }
+            return self.handleOBSRequest(path, query)
         }
-        captionView.evaluateJavaScript(js, completionHandler: nil)
+        captionServer = server
+        server.start()
+    }
+
+    func handleOBSRequest(_ path: String, _ q: [String: String]) -> (status: Int, type: String, body: Data) {
+        switch path {
+        case "/", "/caption", "/caption.html":
+            return (status: 200, type: "text/html; charset=utf-8", body: Data(obsCaptionHTML(cfg.obs).utf8))
+        case "/state":
+            obsLastPoll = Date()
+            let d = captionFeed.delta(epoch: Int(q["e"] ?? "") ?? -1, a: Int(q["a"] ?? "") ?? 0, b: Int(q["b"] ?? "") ?? 0,
+                                      mode: captionModeFor(appleDisplay), visible: obsVisible())
+            let data = (try? JSONSerialization.data(withJSONObject: d, options: [])) ?? Data("{}".utf8)
+            return (status: 200, type: "application/json; charset=utf-8", body: data)
+        default:
+            return (status: 404, type: "text/plain; charset=utf-8", body: Data("not found".utf8))
+        }
+    }
+
+    /// OBS 上要不要显示：same = 跟投影字幕条一样；auto = 字幕时段内（或手动打开时）一直显示
+    func obsVisible() -> Bool {
+        if cfg.obs.visibility == "auto" {
+            return captionVisible || captionAutoVisible(appNow())
+        }
+        return captionVisible
+    }
+
+    func obsStatusText() -> String {
+        guard cfg.obs.enabled else { return "OBS 字幕叠加：已关闭（config.json 的 obs.enabled）" }
+        guard let s = captionServer else { return "OBS 字幕叠加：未启动" }
+        var t = "OBS 字幕叠加：\(s.state)"
+        if let last = obsLastPoll {
+            t += Date().timeIntervalSince(last) < 5 ? "（OBS 已连接）" : "（OBS \(durationText(Date().timeIntervalSince(last))) 前连接过）"
+        } else {
+            t += "（OBS 还没连接）"
+        }
+        return t
     }
 
     /// 本机识别：要翻成哪种语言（空 = 不翻译）
@@ -4149,8 +4985,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
                 guard let self = self else { return }
                 self.appleOriginal = original
                 self.appleTranslation = translated
-                if self.captionSource == "apple" { self.refreshCaptionDisplay() }
             }
+            r.onCaption = { [weak self] ev in self?.appleCaption(ev) }
+            r.autoPunctuation = cfg.caption.apple.autoPunctuation
+            r.pauseComma = cfg.caption.apple.pauseComma
+            r.pausePeriod = cfg.caption.apple.pausePeriod
             r.onStatus = { [weak self] status in
                 self?.appleStatus = status
                 writeLog("本机识别：\(status)")
@@ -4173,6 +5012,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         guard let r = recognizer else { return }
         appleOriginal = ""
         appleTranslation = ""
+        captionFeed.reset()
         refreshCaptionDisplay()
         writeLog("本机识别：\(why)（\(languageName(appleLanguage))，输入 \(cfg.caption.apple.inputDevice)）")
         transcriptHeaderPending = true
@@ -4197,7 +5037,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         captionSource = src
         writeLog("字幕来源：\(captionSourceText())")
         infoHUD.show("字幕来源：\(captionSourceText())", on: builtInScreen(), seconds: 3)
-        if src == "kaleo" { recognizer?.stop() }
+        captionFeed.reset()
+        kaleoMerger.reset()
+        if src == "kaleo" {
+            recognizer?.stop()
+            if !captionText.isEmpty { kaleoCaption(captionText) }
+        }
         layoutContent()
         refreshCaptionDisplay()
         captionTick(appNow())
@@ -4225,7 +5070,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
     func applyCaptionStyle() {
         guard captionPageLoaded else { return }
         let c = cfg.caption
-        let js = "window.setStyle && window.setStyle(\(jsString(c.color)), \(jsString(c.background)), \(c.lines), \(jsString("实时翻译 · Live Translation")))"
+        let js = "window.capStyle && window.capStyle({fg:\(jsString(c.color)),bg:\(jsString(c.background)),lines:\(c.lines),"
+            + "ph:\(jsString("实时翻译 · Live Translation")),margin:\(c.marginPercent)})"
         captionView.evaluateJavaScript(js, completionHandler: nil)
     }
 
@@ -5067,6 +5913,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
             lines.append("实时翻译：今天不自动显示（需要时按 \(t)）")
         }
         if captionSource == "apple" && cfg.glossary.enabled { lines.append(glossaryInfo) }
+        if captionToday && cfg.obs.enabled { lines.append(obsStatusText()) }
         if hotkeyProblems > 0 { lines.append("快捷键：⚠️ 有冲突，详见菜单栏图标") }
         for p in problems { lines.append("⚠️ \(p)") }
         var control = "控制：点菜单栏图标"
@@ -5231,6 +6078,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
             addInfo(cm, "这台 Mac 的音频输入：" + names.joined(separator: "、"))
         }
         cm.addItem(NSMenuItem.separator())
+        // OBS
+        addInfo(cm, obsStatusText())
+        if cfg.obs.enabled && captionServer != nil {
+            addAction(cm, nil, "复制 OBS 字幕网址（浏览器来源用）", #selector(menuCopyOBSURL))
+            addAction(cm, nil, "在浏览器里预览 OBS 字幕页", #selector(menuOpenOBSPage))
+            addAction(cm, nil, "OBS 字幕：跟投影字幕条一起显示/隐藏", #selector(menuOBSSame), on: cfg.obs.visibility == "same")
+            addAction(cm, nil, "OBS 字幕：字幕时段内一直显示（投影上隐藏也显示）", #selector(menuOBSAuto), on: cfg.obs.visibility == "auto")
+        }
+        cm.addItem(NSMenuItem.separator())
         // Kaleo
         addInfo(cm, "Kaleo 网页：" + (sourceRequested ? sourceState : "未载入（需要时自动载入）"))
         addInfo(cm, captionTextStatus())
@@ -5329,6 +6185,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
     @objc func menuCaptionReload() { loadSource("手动重新载入") }
     @objc func menuCaptionSetup() { openCaptionSetupWindow() }
     @objc func menuCaptionDump() { dumpCaptionPage() }
+    @objc func menuCopyOBSURL() {
+        guard let s = captionServer else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(s.url, forType: .string)
+        infoHUD.show("已复制：\(s.url)\n在 OBS 里：来源 › + › 浏览器，粘贴到“URL”", on: builtInScreen(), seconds: 5)
+    }
+    @objc func menuOpenOBSPage() {
+        guard let s = captionServer, let u = URL(string: s.url) else { return }
+        _ = NSWorkspace.shared.open(u)
+    }
+    @objc func menuOBSSame() {
+        cfg.obs.visibility = "same"
+        infoHUD.show("OBS 字幕：跟投影字幕条一起显示/隐藏", on: builtInScreen(), seconds: 3)
+    }
+    @objc func menuOBSAuto() {
+        cfg.obs.visibility = "auto"
+        infoHUD.show("OBS 字幕：字幕时段内一直显示（投影上按 ⌃⌥T 隐藏时也显示）", on: builtInScreen(), seconds: 3)
+    }
     @objc func menuReload() {
         rescanNow()
         if pdfShownKey == nil { tick() } else { reloadShownPDFKeepingPage() }
@@ -5399,6 +6273,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
             writeLog("Google Drive：rclone = \(exe.path)；远程 \(cfg.gdrive.remote)；文件夹 \(cfg.gdrive.folderId)；下载到 \(pdfFolderURL.path)")
         }
         writeLog("本机识别：整句翻译\(sentenceMode ? "开" : "关")（最多等 \(cfg.caption.apple.sentenceMaxSeconds) 秒，停顿 \(cfg.caption.apple.sentencePauseSeconds) 秒算一句）；翻译\(highFidelity ? "高保真" : "快速")；字幕记录\(cfg.caption.apple.saveTranscript ? "保存到 transcripts 文件夹" : "不保存")")
+        writeLog("本机识别补标点：" + (cfg.caption.apple.autoPunctuation == "off" ? "关" :
+                 "\(cfg.caption.apple.autoPunctuation == "all" ? "普通话和英语" : "普通话")，停顿 \(cfg.caption.apple.pauseComma) 秒补逗号、\(cfg.caption.apple.pausePeriod) 秒补句号"))
+        writeLog("字幕左右留白 \(cfg.caption.marginPercent)%；" + (cfg.obs.enabled ? "OBS 字幕页 http://127.0.0.1:\(cfg.obs.port)/caption（\(cfg.obs.visibility == "auto" ? "字幕时段内一直显示" : "跟投影字幕条一起显示/隐藏")）" : "OBS 字幕叠加已关闭"))
         writeLog(cfg.glossary.enabled
                  ? "术语表：\(cfg.glossary.files.joined(separator: "、"))；读音纠正 \(cfg.glossary.fuzzy)（\(cfg.glossary.fuzzyMinLength) 字以上）；今日术语文件 \(rulePatternsTerms())"
                  : "术语表：已关闭")

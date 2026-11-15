@@ -42,8 +42,9 @@
     "warnFor": ["pdf1", "pdf2"]
   },
 
-  "_caption说明": "实时翻译字幕条。when：firstSunday（每月第一个星期天）、sunday（每个星期天）、always（每天）、never（只手动打开）。showDuring：哪些画面时显示；from/to：几点开始/停止自动显示（to 留空 = 到画面结束）。随时可按 ⌃⌥T 手动显示/隐藏。heightPercent：占投影高度的百分比。lines：显示几行。overlay：true = 叠加在 PDF 下部（PDF 保持全屏，做 PDF 时把这些页的下方 1/5 留白），false = PDF 缩到上方 4/5。background：颜色，或 transparent（透明，字直接显示在 PDF 留白处，带黑色描边）。mode：text（提取文字显示大字）或 page（直接显示原网页）。textSelector：一般留空（自动寻找），找得不准时填 CSS 选择器。",
+  "_caption说明": "实时翻译字幕条。when：firstSunday（每月第一个星期天）、sunday（每个星期天）、always（每天）、never（只手动打开）。showDuring：哪些画面时显示；from/to：几点开始/停止自动显示（to 留空 = 到画面结束）。随时可按 ⌃⌥T 手动显示/隐藏。heightPercent：占投影高度的百分比。lines：显示几行。marginPercent：字幕左右各留白多少（占屏幕宽度的百分比）。字幕从左到右写，一行写满整行向上滚动。overlay：true = 叠加在 PDF 下部（PDF 保持全屏，做 PDF 时把这些页的下方 1/5 留白），false = PDF 缩到上方 4/5。background：颜色，或 transparent（透明，字直接显示在 PDF 留白处，带黑色描边）。mode：text（提取文字显示大字）或 page（直接显示原网页）。textSelector：一般留空（自动寻找），找得不准时填 CSS 选择器。",
   "_caption来源说明": "source：字幕来源，kaleo（Kaleo 网页）或 apple（本机识别 + 翻译），使用时可随时用 ⌃⌥S 或菜单切换。apple 里：language 识别语言 zh-CN（普通话）或 en-US（英语），用 ⌃⌥L 切换；translateTo：auto = 翻成另一种语言，none = 不翻译；inputDevice：音频输入设备名字（包含即可，留空 = 系统默认输入）；channel：0 = 混合所有输入，1 / 2 = 只用第 1 / 2 路输入；display：both（上面一行原文、下面译文）、translation（只显示译文）、original（只显示原文）；clearAfterSeconds：多少秒没人说话就清空字幕。",
+  "_caption补标点说明": "autoPunctuation：按讲员的停顿自动补标点，zh = 只对普通话（默认），all = 普通话和英语，off = 不补；pauseComma：停顿几秒补逗号；pausePeriod：停顿几秒补句号。讲得快、标点太少就把两个数调小一点（例如 0.25 / 0.6），标点太多就调大。",
   "_caption翻译质量说明": "sentenceMode：true = 整句翻译（一句说完再翻，更准，译文晚一两秒；⌃⌥J 随时切换）；sentenceMaxSeconds：整句翻译最多等几秒；sentencePauseSeconds：停顿几秒算一句说完；translationQuality：high = 高保真（macOS 26.4 起，Apple Intelligence 打开时用它的模型，否则自动用普通模型），fast = 普通模型；saveTranscript：把识别和翻译存到 Presenter 文件夹的 transcripts/transcript-yyyymmdd.txt（复查、补充术语表用）。",
   "caption": {
     "source": "kaleo",
@@ -58,7 +59,10 @@
       "sentenceMaxSeconds": 7,
       "sentencePauseSeconds": 1.2,
       "translationQuality": "high",
-      "saveTranscript": true
+      "saveTranscript": true,
+      "autoPunctuation": "zh",
+      "pauseComma": 0.3,
+      "pausePeriod": 0.8
     },
     "url": "https://app.withkaleo.com/c/oakville-chinese-hope-church",
     "when": "firstSunday",
@@ -73,7 +77,21 @@
     "background": "#000000",
     "overlay": true,
     "pageZoom": 1.5,
-    "reloadIfStaleMinutes": 10
+    "reloadIfStaleMinutes": 10,
+    "marginPercent": 10
+  },
+
+  "_obs说明": "OBS 字幕叠加：Presenter 在本机提供字幕网页 http://127.0.0.1:端口/caption，在 OBS 里加一个“浏览器”来源（宽 1920、高 1080）放到所有场景最上层，线上就能看到字幕。visibility：same = 跟投影字幕条一起显示/隐藏（⌃⌥T 同时控制两边），auto = 字幕时段内一直显示（投影上按 ⌃⌥T 隐藏时线上照样有）。lines：几行；heightPercent：字幕条占视频高度的百分比；bottomPercent：离视频底边多远；marginPercent：左右各留白；background：字幕条背景（rgba 最后一个数是不透明度）；color：字的颜色。",
+  "obs": {
+    "enabled": true,
+    "port": 8765,
+    "visibility": "same",
+    "lines": 3,
+    "heightPercent": 15,
+    "bottomPercent": 4,
+    "marginPercent": 10,
+    "background": "rgba(0,0,0,0.55)",
+    "color": "#ffffff"
   },
 
   "_glossary说明": "术语表（只对本机识别有效）。files：术语表文件（在 Presenter 文件夹里，前面的优先）：glossary.csv 是教会自己的，glossary-bible.csv 是内置的圣经书卷/人名/地名。beforeTranslation：翻译前把术语换成固定的译名。fuzzy：读音相同的自动纠正，today = 只对今日术语，all = 对所有术语（容易改错，不建议），off = 不做。fuzzyMinLength：几个字以上的词才做读音纠正。pdfTerms：今天 PDF 里出现的术语和“讲员：xxx”这类名字算今日术语。termsFile：今日术语文件的名字规则（放在 Presenter 文件夹或下载文件夹）。fromGoogleDrive：也从 Google Drive 文件夹下载 terms-yyyymmdd（Google 表格 / Google 文档 / csv / txt）。改术语表文件后不用重开 Presenter，几秒内自动生效。",
