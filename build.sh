@@ -51,8 +51,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleDisplayName</key><string>Presenter</string>
   <key>CFBundleExecutable</key><string>Presenter</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>2.2</string>
-  <key>CFBundleVersion</key><string>4</string>
+  <key>CFBundleShortVersionString</key><string>2.3</string>
+  <key>CFBundleVersion</key><string>5</string>
   <key>LSMinimumSystemVersion</key><string>11.0</string>
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
@@ -76,3 +76,4 @@ echo "   彩排：killall Presenter; open Presenter.app --args --test"
 echo "   注意：每次重新编译后，第一次运行时系统会询问能否读取“下载”文件夹，请点“好/允许”。"
 echo "         第一次使用本机识别时，还会询问“麦克风”和“语音识别”权限，也请点“允许”。"
 echo "   自动启动：bash autostart.sh on 09:05（每周日 9:05）"
+echo "   复查字幕记录：open Presenter.app --args --review（最近一次；或 --review 20261115）"

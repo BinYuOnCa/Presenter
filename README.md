@@ -49,11 +49,13 @@ AirDrop 新的 `Presenter-ready.zip` 到 Air，在“下载”里解压，然后
 ```bash
 killall Presenter
 rm -rf ~/Presenter/Presenter.app
-cp -R ~/Downloads/Presenter/Presenter.app ~/Downloads/Presenter/config.json ~/Downloads/Presenter/README.md ~/Presenter/
+cp ~/Presenter/config.json ~/Presenter/config.old.json      # 备份旧设置
+cp -R ~/Downloads/Presenter/Presenter.app ~/Downloads/Presenter/config.json ~/Downloads/Presenter/README.md ~/Downloads/Presenter/glossary-bible.csv ~/Presenter/
+cp -n ~/Downloads/Presenter/glossary.csv ~/Presenter/      # 教会术语表：只在第一次复制（-n 不覆盖已有的）
 xattr -dr com.apple.quarantine ~/Presenter
 rm -rf ~/Downloads/Presenter ~/Downloads/Presenter-ready.zip
 ```
-只换 App、`config.json` 和说明；`images/LogoNew.png`、`stage.html`、crontab 设置都不动。
+只换 App、`config.json`、内置术语表 `glossary-bible.csv` 和说明；`images/LogoNew.png`、`stage.html`、教会自己的 `glossary.csv`、字幕记录、crontab 设置都不动。
 （如果你改过旧的 `config.json`，把改动抄到新的里；新的 `config.json` 里要填 `gdrive.folderId`，见第三节。）
 `~/Presenter/rclone` 和 rclone 的登录设置也都不受影响。
 
@@ -172,8 +174,124 @@ Air 自己从 **Maono ProStudio 2x2 Lite**（和 OBS 同一个输入，互不影
 - 菜单里“本机识别”显示 ⚠️ 找不到 “Maono ProStudio 2x2 Lite”：会改用系统默认输入，日志里列出了现有的输入设备名字，把正确的名字填到 `config.json` 的 `caption.apple.inputDevice`。
 - 讲台麦克风只接在第 1 路输入：`"channel": 1`（默认 0 = 两路混在一起）。
 - 显示“翻译语言还没下载”：做上面第 1 步，然后按两次 `⌃⌥S`（切走再切回）重新开始。
-- 识别准确度主要看音质：调音台给的干净讲台信号最好；圣经人名、地名可能认错。
+- 识别准确度主要看音质：调音台给的干净讲台信号最好。人名、地名、专有名词认错或翻错：见下一小节“提高翻译质量”。
 - 需要 macOS 26 和 Xcode 26 编译。用旧版 Xcode 编译时，编译脚本会提示“不包含本机识别功能”，其他功能照常。
+
+### 提高翻译质量：术语表、整句翻译、字幕记录（只对本机识别有效）
+
+本机识别有四个帮助提高质量的功能，默认都已打开：
+
+**1. 整句翻译（`⌃⌥J` 开/关）**
+原文还是一边说一边出字；译文等一句话说完（句号、问号，或停顿 1.2 秒，最长等 7 秒）再整句翻译。翻译时有完整的上下文，人名、代词更准，代价是译文晚一两秒出现。
+讲得很快、句子很长、觉得译文太慢时，按 `⌃⌥J` 关掉（每一段马上翻），再按一次打开。菜单 › 实时翻译 里也能切换。
+
+**2. 高保真翻译**
+菜单 › 实时翻译 › 翻译质量：**高保真**（默认）/ **快速**。高保真在 Apple Intelligence 打开时用它的模型翻译（质量更好），没打开时自动用普通模型，和“快速”一样。
+- 要真正用上：Air 的 系统设置 › Apple Intelligence 与 Siri，打开 Apple Intelligence（M1 支持；第一次要下载模型）。
+- 菜单里会显示“翻译平均 x 秒/句”。如果 Air 和 OBS 一起跑变慢、发热，或者译文太慢，改成“快速”。
+
+**3. 术语表**（`glossary.csv`、`glossary-bible.csv`，在 Presenter 文件夹里）
+- 识别出来先**纠错**：第 3 列写了的错误写法会改成正确的字（投影上的原文也显示正确的字）。
+- 翻译前把中文术语**换成固定的英文译名**再翻译（英文讲员时反过来），译名就不会每次不一样。
+- `glossary-bible.csv`：内置的圣经 66 卷书名、常见人名、地名和教会用语（和合本 → NIV 译法），升级时可以直接覆盖。
+- `glossary.csv`：教会自己的词（教会名字、牧者同工、团契事工、本地地名），**优先于**内置的。里面已经放了教会名字和几个本地地名作例子，牧者同工的名字请按真实的改。
+- 用 **TextEdit** 编辑（菜单 › 实时翻译 › 术语表和字幕记录 › 打开教会术语表）。不要用 Numbers 打开再保存，会变成 `.numbers` 文件。也可以用 Excel 编辑后“另存为 CSV UTF-8”。
+- **保存后几秒内自动生效**，不用重开 Presenter（正在识别时，下一句开始用新的术语表）。
+
+每行一个词，用逗号分开：
+
+```
+中文,English,中文常被识别成,英文常被识别成,方向
+以利亚,Elijah,一里亚|伊利亚
+王约翰牧师,Pastor John Wang,王约汉牧师
+诗篇,Psalm,,,中→英
+!一粒沙
+```
+- 第 3 列（中文识别错的写法）、第 4 列（英文讲员时英文识别错的写法）：多个用 `|` 分开，可以不填。
+- 第 5 列方向：不填 = 双向；`中→英` = 只在中文翻英文时替换（书卷名用这个，免得英文讲员说 Job、Acts 时被换成书卷名）。
+- 只写中文、不写英文：不指定译名，只是保护这个词不被拆开（例如名字“王约翰”里的“约翰”不会被单独换成 John）。
+- `!` 开头的行：这几个字**永远不自动改**（读音纠正改错时用）。
+- `#` 开头的行是注释。中文逗号、Tab 分隔也可以。
+
+**4. 今日术语和读音纠正**
+每周的讲道会有一些只用这一次的名字。Presenter 把下面这些当成“今日术语”：
+- **今天 PDF 里出现的术语**：Presenter 读出主日学和敬拜 PDF 里的文字，术语表里的词出现在 PDF 里，就算今日术语；PDF 里“讲员：王约翰牧师”这类行里的名字也算。全自动，不用做什么。
+- **今日术语文件**（可选）：在 Google Drive 放 Slides 的那个文件夹里建一个 **Google 表格**，标题 `terms-20261122`（当天日期），A 列中文、B 列英文、C 列常被识别成。Presenter 启动时和敬拜前会和 PDF 一起把它下载到“下载”文件夹（`terms-20261122.csv`）。
+  也可以用 Google 文档（每行 `以利沙, Elisha` 或 `以利沙 Elisha`），或者直接把 `terms-20261122.csv` / `.txt` 放进 Presenter 文件夹或“下载”文件夹。格式和 `glossary.csv` 一样，而且优先于 `glossary.csv`。
+
+今日术语多了一种纠正：**读音相同就自动改**（不看声调，三个字以上的词）。例如今天讲以利沙，识别成“衣里沙”会自动改成“以利沙”。
+但像“哥哥他”（各各他）、“八十八”（拔示巴）、“一粒沙”（以利沙）这样本身就是普通词语的，**不会自动改**，只在字幕记录里记成“可能是…？”，留给你复查时决定。
+（两个字的词读音相同的太多，不做读音纠正；需要时把错误写法写进第 3 列。）
+
+**字幕记录**
+每次用本机识别，Presenter 都把识别和翻译存到 `transcripts/transcript-20261115.txt`（每天一个文件），每句一段：
+
+```
+[10:41:05]
+原：今天我们来看衣里沙的故事
+改：今天我们来看以利沙的故事	【衣里沙→以利沙（读音）】
+送：今天我们来看 Elisha 的故事
+译：Today we look at the story of Elisha.
+```
+`原` = 识别出来的原文；`改` = 纠正后（后面是改了什么，没改就没有这一行）；`送` = 送去翻译的文字（术语已换成译名）；`译` = 译文。
+每段开头的 `=====` 行记着当时的设置（语言、整句翻译、翻译质量）和用了哪些术语表、今日术语。
+
+#### 从字幕记录整理术语表：具体步骤（每个用本机识别的主日后，约 10–15 分钟）
+
+**第 1 步：生成复查报告**
+- Presenter 还在运行：菜单 › 实时翻译 › 术语表和字幕记录 › **复查最近的字幕记录**。
+- 已经退出（12:15 以后）：终端运行
+  ```bash
+  open ~/Presenter/Presenter.app --args --review              # 最近一次的字幕记录
+  open ~/Presenter/Presenter.app --args --review 20261115     # 某一天的
+  ```
+  不会投影，只做复查。几十秒到一两分钟后，`transcripts/review-20261115.txt` 会自动用 TextEdit 打开，Presenter 随后自己退出。
+
+报告有三部分：
+
+**第 2 步：看“一、译文里的人名、地名”**（还不在术语表里的，按出现次数排列，每个带一句例子）
+```
+  Wang Yuehan ×3（像拼音：多半是没认出的中文名字）
+     例：[10:41:05] 今天由王约汉牧师讲道
+         Today, Pastor Wang Yuehan preached
+```
+对每一个判断：
+- 是人名/地名，译文不对（像拼音、或译错了）→ 在 `glossary.csv` 加一行 `中文,正确的英文`。
+- 原文的字也听错了（例子里“约汉”应该是“约翰”）→ 同时把错的写法放进第 3 列：`王约翰牧师,Pastor John Wang,王约汉牧师`。
+- 译文本来就对（例如 Toronto）→ 不用管；想固定下来也可以加一行。
+- 只在这一次讲道出现的（例如客座讲员的家乡）→ 不加也行，或者下次放进当天的今日术语。
+
+**第 3 步：看“二、自动纠正”**
+- **已改**：确认每一条都改对了。
+  - 改错了（例如讲的是沙子，“一粒沙”却被改成“以利沙”）→ `glossary.csv` 加一行 `!一粒沙`，以后不再改。
+  - 某个第 3 列的写法本身是常用词、老是误改 → 把它从第 3 列删掉。
+- **可能听错**（读音相同但像普通词语，没有改）：
+  - 确实是听错，而且这个错误写法平时不会出现 → 加到那个词的第 3 列，例如 `以利亚,Elijah,一里亚`。
+  - 这个写法平时也会说（“哥哥他”“八十八”）→ 不要加到 `glossary.csv`，否则以后每次都会被改。不管它，或者只在讲那段经文的那周写进今日术语文件的第 3 列。
+
+**第 4 步：顺便扫一眼字幕记录本身**（可选）
+用 TextEdit 打开 `transcripts/transcript-20261115.txt`，按 ⌘F 搜关键的人名、地名，或者快速看几段 `原`/`译`：
+
+| 字幕记录里看到 | 是什么问题 | `glossary.csv` 里怎么写 |
+|---|---|---|
+| `原：……一里亚……`（应是以利亚） | 识别错（字错了） | `以利亚,Elijah,一里亚`（这个词已经有一行就在那行第 3 列加，多个用 `\|` 分开） |
+| `原` 是对的，`译` 里成了 Yi Liya | 翻译错 | `以利亚,Elijah` |
+| `送` 里的英文词让 `译` 变得别扭 | 这个词不适合翻译前替换 | 改成只写中文：`那个词,`；或者第 5 列写 `英→中` |
+| `改` 把对的字改错了 | 误改 | `!那几个字` |
+| 英文讲员：`原：……Oak Ville……` | 英文识别错 | `橡城,Oakville,,Oak Ville` |
+
+内置的词（`glossary-bible.csv` 里有的）要加错误写法：在 `glossary.csv` 里写一行同样的中文，**英文也要写上**，例如 `以利沙,Elisha,一粒沙`（`glossary.csv` 优先）。
+
+**第 5 步：保存，再复查一次**
+保存 `glossary.csv` 后，重复第 1 步。报告的“三、用现在的术语表重新处理，结果有变化的句子”会列出每一句的 `旧改/新改`、`新送`、`旧译/新译`（用新的术语表重新翻译过）：
+- 新的都对 → 完成，下次自动用上。
+- 有新问题（例如某个词替换后译文反而别扭）→ 调整那一行，再复查。
+
+**主日前（可选，5 分钟）**：知道讲道会提到哪些不常见的名字（讲员、经文里的人名地名）时，在 Google Drive 建 `terms-日期` 表格写上，当天的识别和翻译就会用上（见上面“今日术语”）。
+
+**相关设置**（`config.json`）：
+- `caption.apple`：`sentenceMode`（整句翻译）、`sentenceMaxSeconds`（最多等几秒）、`sentencePauseSeconds`（停顿几秒算一句）、`translationQuality`（`high` / `fast`）、`saveTranscript`（存字幕记录）。
+- `glossary`：`files`（术语表文件，前面的优先）、`beforeTranslation`（翻译前替换）、`fuzzy`（读音纠正：`today` 只对今日术语 / `all` / `off`）、`fuzzyMinLength`、`pdfTerms`（从 PDF 找今日术语）、`termsFile`（今日术语文件名规则）、`fromGoogleDrive`。
 
 ### 字幕条设置
 
@@ -227,6 +345,7 @@ killall Presenter; cd ~/Presenter && open Presenter.app --args --test
 - `--at 10:16:50`：按真实时间表运行，但假装现在是 10:16:50（试 10:17 的提醒和延长；`--at 10:39:30 --caption` 试 10:40 字幕条出现）
 - `--date 20261101`：按某天的日期找 PDF（也按这个日期从 Google Drive 下载，周六晚上试明天的文件很方便）
 - `--nogdrive`：这次不从 Google Drive 下载，只用“下载”里已有的文件
+- `--review`：不投影，只复查最近一次的字幕记录（`--review 20261115` 复查某一天），见第五节“从字幕记录整理术语表”
 
 例：试字幕条 2 分钟 —— `killall Presenter; open Presenter.app --args --test --caption --pdftime 120`
 
@@ -247,6 +366,7 @@ killall Presenter; cd ~/Presenter && open Presenter.app --args --test
 | 本机识别：只显示原文 | `⌃⌥O`（Original） |
 | 本机识别：只显示译文 | `⌃⌥Y`（译文） |
 | 本机识别：原文 + 译文 | `⌃⌥A`（All） |
+| 本机识别：整句翻译 开/关 | `⌃⌥J`（句） |
 | 黑屏开/关 | `⌃⌥B` |
 | 立即显示 PDF（当前时段的，或下一个） | `⌃⌥P` |
 | 退出 Presenter | `⌃⌥Esc` |
@@ -286,7 +406,7 @@ macOS 15 起不允许只用 Option（⌥）或 Option+Shift 的全局快捷键�
 |---|---|
 | `presenter.swift` | 程序源代码 |
 | `build.sh` | 编译成 `Presenter.app`，并打包 `Presenter-ready.zip` |
-| `config.json` | 时间表、PDF 文件夹和文件名规则、延长、实时翻译、快捷键 |
+| `config.json` | 时间表、PDF 文件夹和文件名规则、延长、实时翻译、术语表设置、快捷键 |
 | `stage.html` | 欢迎页、时钟页、倒计时画面 |
 | `images/` | 放 `LogoNew.png` |
 | `pdf/sample.pdf` | 仅测试模式使用 |
@@ -295,3 +415,7 @@ macOS 15 起不允许只用 Option（⌥）或 Option+Shift 的全局快捷键�
 | `gdrive-state.json` | 记录上次从 Google Drive 下载的版本（运行后生成，删掉也没关系） |
 | `presenter.log`、`cron.log` | 运行日志、自动启动记录（运行后生成） |
 | `caption-dump-*` | “保存网页结构和截图”生成的文件（调整实时翻译用） |
+| `glossary.csv` | 教会自己的术语表（教会名字、牧者同工、团契事工、地名；升级时不要覆盖） |
+| `glossary-bible.csv` | 内置术语表：圣经书卷、人名、地名、教会用语（升级时可以覆盖） |
+| `terms-yyyymmdd.csv` | 当天的今日术语（可选；也可以放在“下载”里或 Google Drive） |
+| `transcripts/` | 本机识别的字幕记录 `transcript-日期.txt` 和复查报告 `review-日期.txt`（运行后生成） |

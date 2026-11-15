@@ -13,6 +13,8 @@
 // - 投影窗口是“不抢焦点”的面板：出现、切换、翻页都不会把焦点从 OBS 抢走，鼠标点击也会穿透。
 // - 全局快捷键用系统热键接口（RegisterEventHotKey），不需要“辅助功能/输入监控”权限。
 // - 启动时读取 OBS 的快捷键设置，与 OBS 相同的组合不会注册，并在菜单栏里标出。
+// - 本机识别（Apple）：术语表纠错 + 翻译前替换译名、整句翻译（⌃⌥J）、高保真翻译、字幕记录（transcripts/），
+//   --review 复查字幕记录，帮助补充术语表。
 // - 程序运行期间阻止系统/显示器休眠和屏保。
 // - 投影屏断开时窗口自动隐藏（不会跑到内建屏盖住 OBS），重新接上后自动回来。
 
@@ -20,6 +22,7 @@ import Cocoa
 import WebKit
 import PDFKit
 import Carbon
+import NaturalLanguage
 #if compiler(>=6.2)
 import Speech
 import Translation
@@ -162,6 +165,7 @@ let defaultHotkeys: [String: [String]] = [
     "showOriginal": ["ctrl+alt+o"],
     "showTranslation": ["ctrl+alt+y"],
     "showBoth": ["ctrl+alt+a"],
+    "sentenceMode": ["ctrl+alt+j"],
     "pdfNow": ["ctrl+alt+p"],
     "quit": ["ctrl+alt+escape"],
 ]
@@ -198,6 +202,22 @@ struct AppleCaptionConfig {
     var channel = 0                     // 0 = 混合所有输入；1、2 = 只用第几路输入
     var display = "both"                // both（原文 + 译文）| translation | original
     var clearAfterSeconds: Double = 15
+    var sentenceMode = true             // 整句翻译：一句说完再翻（⌃⌥J 切换）
+    var sentenceMaxSeconds: Double = 7  // 整句翻译最多等几秒
+    var sentencePauseSeconds: Double = 1.2   // 停顿几秒算一句说完
+    var translationQuality = "high"     // high（高保真，Apple Intelligence 可用时）| fast
+    var saveTranscript = true           // 把识别和翻译存到 transcripts/transcript-yyyymmdd.txt
+}
+
+struct GlossaryConfig {
+    var enabled = true
+    var files: [String] = ["glossary.csv", "glossary-bible.csv"]   // 前面的优先
+    var beforeTranslation = true        // 翻译前把术语换成译名
+    var fuzzy = "today"                 // 读音相同的自动纠正：today（只对今日术语）| all | off
+    var fuzzyMinLength = 3              // 几个字以上的词才做读音纠正
+    var pdfTerms = true                 // 今天 PDF 里出现的术语和名字算今日术语
+    var termsFile = "^terms-{date}\\.(csv|txt)$"   // 今日术语文件（在 Presenter 文件夹或下载文件夹）
+    var fromGoogleDrive = true          // 也从 Google Drive 文件夹下载今日术语文件
 }
 
 struct CaptionConfig {
@@ -231,6 +251,7 @@ struct PresenterConfig {
     var warnFor: [String]?              // nil = 所有 PDF
     var caption = CaptionConfig()
     var gdrive = GDriveConfig()
+    var glossary = GlossaryConfig()
 }
 
 enum Scene: Equatable {
@@ -281,9 +302,13 @@ struct PDFScan {
     var matches: [String: URL] = [:]
     var counts: [String: Int] = [:]
     var unused: [String] = []   // 含当天日期、但不符合任何规则的 PDF
+    var mods: [String: Date] = [:]
+    var terms: URL?             // 今日术语文件（terms-yyyymmdd.csv/txt）
+    var glossaryStamp = ""      // 术语表文件和今日术语文件的修改时间（变了就重新载入）
 }
 
-func scanPDFFolder(_ folder: URL, date: String, rules: [String: NSRegularExpression]) -> PDFScan {
+func scanPDFFolder(_ folder: URL, date: String, rules: [String: NSRegularExpression],
+                   termsRule: NSRegularExpression? = nil) -> PDFScan {
     var r = PDFScan()
     r.checked = true
     let items: [URL]
@@ -307,9 +332,15 @@ func scanPDFFolder(_ folder: URL, date: String, rules: [String: NSRegularExpress
         return r
     }
     var best: [String: (url: URL, mod: Date)] = [:]
+    var bestTerms: (url: URL, mod: Date)?
     for u in items {
         let name = u.lastPathComponent
         let range = NSRange(location: 0, length: (name as NSString).length)
+        if let tr = termsRule, tr.firstMatch(in: name, options: [], range: range) != nil {
+            let mod = (try? u.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? Date.distantPast
+            if bestTerms == nil || mod > bestTerms!.mod { bestTerms = (url: u, mod: mod) }
+            continue
+        }
         var matched = false
         for (key, re) in rules where re.firstMatch(in: name, options: [], range: range) != nil {
             matched = true
@@ -322,8 +353,28 @@ func scanPDFFolder(_ folder: URL, date: String, rules: [String: NSRegularExpress
             r.unused.append(name)
         }
     }
-    for (k, v) in best { r.matches[k] = v.url }
+    for (k, v) in best {
+        r.matches[k] = v.url
+        r.mods[k] = v.mod
+    }
+    r.terms = bestTerms?.url
     r.unused.sort()
+    return r
+}
+
+/// 后台检查：PDF 文件夹 + 今日术语文件 + 术语表文件有没有改过
+func scanEverything(folder: URL, date: String, rules: [String: NSRegularExpression], termsRule: NSRegularExpression?,
+                    baseDir: URL, glossaryFiles: [URL]) -> PDFScan {
+    var r = scanPDFFolder(folder, date: date, rules: rules, termsRule: termsRule)
+    var stamp: [String] = []
+    for u in glossaryFiles { stamp.append(u.lastPathComponent + "@" + String(modDate(u)?.timeIntervalSince1970 ?? 0)) }
+    if let tr = termsRule, baseDir.standardizedFileURL != folder.standardizedFileURL,
+       let b = newestFile(in: [baseDir], matching: tr) {
+        let current = r.terms.flatMap { modDate($0) } ?? Date.distantPast
+        if r.terms == nil || b.mod > current { r.terms = b.url }
+    }
+    if let t = r.terms { stamp.append(t.path + "@" + String(modDate(t)?.timeIntervalSince1970 ?? 0)) }
+    r.glossaryStamp = stamp.joined(separator: "|")
     return r
 }
 
@@ -353,6 +404,9 @@ struct GDriveJob {
     let dest: URL
     let known: [String: GDriveRecord]
     let force: Bool
+    var exportFormats = "pdf"           // Google 文档导出成什么格式（今日术语用 csv,txt）
+    var wantPDF = true                  // 下载后检查是不是 PDF
+    var isOptional = false              // 云端没有也不算问题（今日术语）
 }
 
 struct GDriveOutcome {
@@ -442,7 +496,7 @@ func isPDFFile(_ url: URL) -> Bool {
 
 /// 在 Google Drive 文件夹里找今天的 Slides，导出成 PDF 下载（在后台线程运行）
 func runGDriveJob(_ job: GDriveJob) -> [GDriveOutcome] {
-    let common = ["--drive-root-folder-id", job.folderId, "--drive-export-formats", "pdf"]
+    let common = ["--drive-root-folder-id", job.folderId, "--drive-export-formats", job.exportFormats]
     var entries: [[String: Any]] = []
     var listErr: String?
     for attempt in 1...3 {
@@ -485,8 +539,8 @@ func runGDriveJob(_ job: GDriveJob) -> [GDriveOutcome] {
             }
         }
         if bestName.isEmpty {
-            outcomes.append(GDriveOutcome(key: key, ok: false, downloaded: false, record: nil,
-                                          message: "⚠️ 云端文件夹里没有今天的文件"))
+            outcomes.append(GDriveOutcome(key: key, ok: job.isOptional, downloaded: false, record: nil,
+                                          message: job.isOptional ? "云端没有（可选）" : "⚠️ 云端文件夹里没有今天的文件"))
             continue
         }
         let target = job.dest.appendingPathComponent(bestName)
@@ -502,11 +556,12 @@ func runGDriveJob(_ job: GDriveJob) -> [GDriveOutcome] {
         for attempt in 1...2 {
             try? fm.removeItem(at: tmpFile)
             let r = runProcess(job.exe, ["copyto", job.remote + ":" + bestName, tmpFile.path] + common, timeout: 240)
-            if r.status == 0, !r.timedOut, isPDFFile(tmpFile) {
+            let valid = job.wantPDF ? isPDFFile(tmpFile) : ((try? Data(contentsOf: tmpFile))?.isEmpty == false)
+            if r.status == 0, !r.timedOut, valid {
                 done = true
                 break
             }
-            err = (r.status == 0 && !r.timedOut) ? "下载的文件不是有效的 PDF" : r.errorSummary
+            err = (r.status == 0 && !r.timedOut) ? (job.wantPDF ? "下载的文件不是有效的 PDF" : "下载的文件是空的") : r.errorSummary
             writeLog("⚠️ 下载 \(bestName) 失败（第 \(attempt) 次）：\(err)")
             if attempt < 2 { Thread.sleep(forTimeInterval: 10) }
         }
@@ -543,7 +598,7 @@ struct CachedDoc {
 
 enum HotAction: String, CaseIterable {
     case next, prev, first, last, black, extend, auto, caption, captionSource, captionLanguage
-    case showOriginal, showTranslation, showBoth
+    case showOriginal, showTranslation, showBoth, sentenceMode
     case pdfNow, welcomeNow, clockNow, countdownNow, quit
 
     var title: String {
@@ -561,6 +616,7 @@ enum HotAction: String, CaseIterable {
         case .showOriginal: return "本机识别 只显示原文"
         case .showTranslation: return "本机识别 只显示译文"
         case .showBoth: return "本机识别 原文 + 译文"
+        case .sentenceMode: return "本机识别 整句翻译 开/关"
         case .pdfNow: return "立即显示 PDF（当前或下一个）"
         case .welcomeNow: return "立即显示欢迎页"
         case .clockNow: return "立即显示时钟"
@@ -1264,6 +1320,659 @@ let captionSourceJS = #"""
 })();
 """#
 
+// MARK: - 术语表：专有名词纠错 + 翻译前替换（本机识别用）
+//
+// 文件格式（glossary.csv、glossary-bible.csv、terms-yyyymmdd.csv/.txt 都一样）：
+//   中文,English,中文常被识别成,英文常被识别成,方向
+//   - 第 3/4 列：识别错的写法，多个用 | 分开 → 识别出来后先改正（原文字幕也显示正确的字）
+//   - 翻译前把中文术语换成英文（或反过来），译名就固定了
+//   - 方向：空 = 双向；中→英 = 只在中文翻英文时替换；英→中 = 只在英文翻中文时替换
+//   - “!”开头的行：这些词永远不改（自动纠正改错时用）
+//   - 今日术语（terms 文件、今天 PDF 里出现的术语和名字）还会做“读音相同”的自动纠正
+
+struct GlossaryEntry {
+    var zh: String
+    var en: String
+    var zhVariants: [String]
+    var enVariants: [String]
+    var direction: Int          // 0 双向；1 只在中→英时替换；2 只在英→中时替换
+}
+
+struct GlossarySource {
+    let name: String            // 文件名，或“PDF”
+    let entries: [GlossaryEntry]
+    let protected: [String]     // “!”开头的行：这些词永远不改
+    let today: Bool             // 今日术语：优先，并参与“读音相同”的自动纠正
+}
+
+/// 一处纠正。how：表（术语表第 3/4 列写明的）| 拼音（和今日术语读音相同，已改）| 可能（读音相同但像普通词语，没改，只记下来）
+struct CaptionFix {
+    let from: String
+    let to: String
+    let how: String
+}
+
+/// 本机识别的一句（写进字幕记录）
+struct CaptionRecord {
+    let time: Date
+    let language: String        // 识别语言
+    let raw: String             // 识别原文
+    let fixed: String           // 纠正后
+    let fixes: [CaptionFix]
+    let sent: String            // 送去翻译的文字（翻译前替换后）；没翻译时为空
+    let translated: String
+    let seconds: Double         // 翻译用时
+}
+
+/// 读文本文件：UTF-8（可带 BOM）、UTF-16、GB18030（Windows 版 Excel 存的 CSV）
+func readTextFile(_ url: URL) -> String? {
+    guard let d = try? Data(contentsOf: url) else { return nil }
+    var s: String?
+    if d.count >= 2 && ((d[d.startIndex] == 0xFF && d[d.startIndex + 1] == 0xFE) || (d[d.startIndex] == 0xFE && d[d.startIndex + 1] == 0xFF)) {
+        s = String(data: d, encoding: .utf16)
+    } else if let u = String(data: d, encoding: .utf8) {
+        s = u
+    } else {
+        let gb = CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue))
+        s = String(data: d, encoding: String.Encoding(rawValue: gb))
+    }
+    guard var t = s else { return nil }
+    if t.hasPrefix("\u{FEFF}") { t.removeFirst() }
+    return t
+}
+
+/// 一行 → 各列（英文逗号、中文逗号、Tab 都算分隔；支持英文双引号）
+func splitGlossaryLine(_ line: String) -> [String] {
+    var cols: [String] = []
+    var cur = ""
+    var inQuote = false
+    let chars = Array(line)
+    var i = 0
+    while i < chars.count {
+        let c = chars[i]
+        if inQuote {
+            if c == "\"" {
+                if i + 1 < chars.count && chars[i + 1] == "\"" {
+                    cur.append("\"")
+                    i += 1
+                } else {
+                    inQuote = false
+                }
+            } else {
+                cur.append(c)
+            }
+        } else if c == "\"" {
+            inQuote = true
+        } else if c == "," || c == "，" || c == "\t" {
+            cols.append(cur.trimmingCharacters(in: .whitespaces))
+            cur = ""
+        } else {
+            cur.append(c)
+        }
+        i += 1
+    }
+    cols.append(cur.trimmingCharacters(in: .whitespaces))
+    return cols
+}
+
+func splitVariants(_ s: String, extra: String) -> [String] {
+    var seps: Set<Character> = ["|", "｜"]
+    for c in extra { seps.insert(c) }
+    return s.split(whereSeparator: { seps.contains($0) }).map { $0.trimmingCharacters(in: .whitespaces) }
+}
+
+func glossaryDirection(_ s: String) -> Int {
+    var t = s.lowercased()
+    for ch in [" ", "-", ">", "→", "到", "—", "–"] { t = t.replacingOccurrences(of: ch, with: "") }
+    if t.hasPrefix("中") || t.hasPrefix("zh") { return 1 }
+    if t.hasPrefix("英") || t.hasPrefix("en") { return 2 }
+    return 0
+}
+
+func parseGlossary(_ text: String, name: String) -> (entries: [GlossaryEntry], protected: [String], problems: [String]) {
+    var entries: [GlossaryEntry] = []
+    var protected: [String] = []
+    var problems: [String] = []
+    let hanLatin = try? NSRegularExpression(pattern: "^([\\p{Han}·]+)\\s+([A-Za-z].*)$", options: [])
+    var n = 0
+    for rawLine in text.components(separatedBy: .newlines) {
+        n += 1
+        let line = rawLine.trimmingCharacters(in: .whitespaces)
+        if line.isEmpty || line.hasPrefix("#") { continue }
+        if line.hasPrefix("!") || line.hasPrefix("！") {
+            for p in splitVariants(String(line.dropFirst()), extra: ",，、") where !p.isEmpty { protected.append(p) }
+            continue
+        }
+        var cols = splitGlossaryLine(line)
+        if cols.allSatisfy({ $0.isEmpty }) { continue }      // 只有逗号的行（Excel 常见）
+        // 一行里只有“以利沙 Elisha”这样用空格隔开的（Google 文档里常这样写）
+        if cols.count == 1, let re = hanLatin {
+            let ns = cols[0] as NSString
+            if let m = re.firstMatch(in: cols[0], options: [], range: NSRange(location: 0, length: ns.length)) {
+                cols = [ns.substring(with: m.range(at: 1)), ns.substring(with: m.range(at: 2)).trimmingCharacters(in: .whitespaces)]
+            }
+        }
+        let zh = cols[0]
+        let en = cols.count > 1 ? cols[1] : ""
+        if zh == "中文" || zh.lowercased() == "chinese" { continue }   // 标题行
+        if zh.isEmpty && en.isEmpty {
+            problems.append("\(name) 第 \(n) 行：第 1、2 列都是空的")
+            continue
+        }
+        let zv = cols.count > 2 ? splitVariants(cols[2], extra: "、").filter { !$0.isEmpty && $0 != zh } : []
+        let ev = cols.count > 3 ? splitVariants(cols[3], extra: "").filter { !$0.isEmpty && $0.lowercased() != en.lowercased() } : []
+        if zh.isEmpty && !zv.isEmpty { problems.append("\(name) 第 \(n) 行：写了中文误识别（第 3 列），但第 1 列中文是空的") }
+        if en.isEmpty && !ev.isEmpty { problems.append("\(name) 第 \(n) 行：写了英文误识别（第 4 列），但第 2 列英文是空的") }
+        let dir = cols.count > 4 ? glossaryDirection(cols[4]) : 0
+        entries.append(GlossaryEntry(zh: zh, en: en, zhVariants: zv, enVariants: ev, direction: dir))
+    }
+    return (entries, protected, problems)
+}
+
+/// 汉字 → 不带声调的拼音（如 以 → yi）；不是汉字返回 nil
+var pinyinCache: [Character: String] = [:]
+
+func pinyinSyllable(_ c: Character) -> String? {
+    if let s = pinyinCache[c] { return s.isEmpty ? nil : s }
+    var r = ""
+    let scalars = c.unicodeScalars
+    if scalars.count == 1, let u = scalars.first, u.properties.isIdeographic,
+       let marked = String(c).applyingTransform(.mandarinToLatin, reverse: false),
+       let latin = marked.applyingTransform(.stripDiacritics, reverse: false) {
+        r = latin.lowercased().trimmingCharacters(in: .whitespaces)
+        if r == String(c) || r.contains(" ") { r = "" }
+    }
+    pinyinCache[c] = r
+    return r.isEmpty ? nil : r
+}
+
+func pinyinKey(_ s: String) -> String? {
+    var parts: [String] = []
+    for c in s {
+        guard let p = pinyinSyllable(c) else { return nil }
+        parts.append(p)
+    }
+    return parts.isEmpty ? nil : parts.joined(separator: " ")
+}
+
+/// 一组词 → 正则（长的优先）；latin = 英文词，前后不能紧挨字母数字
+func glossaryRegex(_ words: [String], latin: Bool, ignoreCase: Bool) -> NSRegularExpression? {
+    let ws = Array(Set(words.filter { !$0.isEmpty })).sorted { a, b in
+        a.count != b.count ? a.count > b.count : a < b
+    }
+    if ws.isEmpty { return nil }
+    let alt = ws.map { NSRegularExpression.escapedPattern(for: $0) }.joined(separator: "|")
+    let pattern = latin ? "(?<![A-Za-z0-9])(?:\(alt))(?![A-Za-z0-9])" : "(?:\(alt))"
+    return try? NSRegularExpression(pattern: pattern, options: ignoreCase ? [.caseInsensitive] : [])
+}
+
+/// 按 re 找词，换成 lookup 的结果；和 block 找到的词重叠的不换
+func glossaryReplace(_ text: String, _ re: NSRegularExpression?, blockedBy block: NSRegularExpression?,
+                     _ lookup: (String) -> String?) -> (text: String, pairs: [(String, String)]) {
+    guard let re = re, !text.isEmpty else { return (text, []) }
+    let ns = text as NSString
+    let full = NSRange(location: 0, length: ns.length)
+    let blocked: [NSRange] = block?.matches(in: text, options: [], range: full).map { $0.range } ?? []
+    var out = ""
+    var pos = 0
+    var pairs: [(String, String)] = []
+    for m in re.matches(in: text, options: [], range: full) {
+        let r = m.range
+        if blocked.contains(where: { NSIntersectionRange($0, r).length > 0 }) { continue }
+        let word = ns.substring(with: r)
+        guard let rep = lookup(word), rep != word else { continue }
+        out += ns.substring(with: NSRange(location: pos, length: r.location - pos))
+        out += rep
+        pos = r.location + r.length
+        pairs.append((word, rep))
+    }
+    if pairs.isEmpty { return (text, []) }
+    out += ns.substring(from: pos)
+    return (out, pairs)
+}
+
+/// 中文里夹了英文词之后，整理空格（标点前后不要空格）
+func tidyMixedSpaces(_ s: String) -> String {
+    var t = s.replacingOccurrences(of: "[ \\t]{2,}", with: " ", options: .regularExpression)
+    t = t.replacingOccurrences(of: " +([，。！？、：；,.!?:;）)”」』])", with: "$1", options: .regularExpression)
+    t = t.replacingOccurrences(of: "([（(“「『，。！？、：；]) +", with: "$1", options: .regularExpression)
+    return t.trimmingCharacters(in: .whitespaces)
+}
+
+/// 中文分词结果里由两个字以上组成的词（字的位置，左闭右开）
+func chineseWordSpans(_ text: String) -> [(Int, Int)] {
+    let tok = NLTokenizer(unit: .word)
+    tok.string = text
+    tok.setLanguage(.simplifiedChinese)
+    var spans: [(Int, Int)] = []
+    tok.enumerateTokens(in: text.startIndex..<text.endIndex) { range, _ in
+        let a = text.distance(from: text.startIndex, to: range.lowerBound)
+        let b = text.distance(from: text.startIndex, to: range.upperBound)
+        if b - a > 1 { spans.append((a, b)) }
+        return true
+    }
+    return spans
+}
+
+final class CaptionGlossary {
+    let summary: String
+    let todayTerms: [String]
+    let problems: [String]
+    let fuzzyCount: Int
+    private let beforeTranslation: Bool
+    private let zhFix: [String: String]
+    private let enFix: [String: String]
+    private let zh2en: [String: String]
+    private let en2zhCase: [String: String]
+    private let en2zhNoCase: [String: String]
+    private let englishWords: Set<String>
+    private let zhFixRE: NSRegularExpression?
+    private let enFixRE: NSRegularExpression?
+    private let zhBlockRE: NSRegularExpression?
+    private let enBlockRE: NSRegularExpression?
+    private let zh2enRE: NSRegularExpression?
+    private let zh2enBlockRE: NSRegularExpression?
+    private let en2zhCaseRE: NSRegularExpression?
+    private let en2zhNoCaseRE: NSRegularExpression?
+    private let en2zhBlockRE: NSRegularExpression?
+    private let fuzzy: [Int: [String: String]]
+    private let fuzzyLengths: [Int]
+    private let protectedChars: [[Character]]
+
+    static let numeralChars: Set<Character> = Set("一二三四五六七八九十百千万亿零两几")
+
+    /// sources 按优先顺序排列：今日术语 → glossary.csv → glossary-bible.csv
+    init(sources: [GlossarySource], fuzzyMode: String, fuzzyMinLength: Int, beforeTranslation: Bool,
+         problems: [String], summary: String) {
+        var zhFix: [String: String] = [:]
+        var enFix: [String: String] = [:]
+        var zh2en: [String: String] = [:]
+        var en2zhCase: [String: String] = [:]
+        var en2zhNoCase: [String: String] = [:]
+        var englishWords = Set<String>()
+        var zTargets = Set<String>()
+        var eTargets = Set<String>()
+        var zhOnly = Set<String>()
+        var enOnly = Set<String>()
+        var protectedList: [String] = []
+        var today: [String] = []
+        var fz: [Int: [String: (term: String, prio: Int)]] = [:]
+        for (prio, src) in sources.enumerated() {
+            protectedList += src.protected
+            for e in src.entries {
+                let zh = e.zh
+                let en = e.en
+                if !zh.isEmpty {
+                    for v in e.zhVariants where zhFix[v] == nil {
+                        zhFix[v] = zh
+                        zTargets.insert(zh)
+                    }
+                }
+                if !en.isEmpty {
+                    for w in en.lowercased().split(whereSeparator: { !$0.isLetter }) { englishWords.insert(String(w)) }
+                    for v in e.enVariants where enFix[v.lowercased()] == nil {
+                        enFix[v.lowercased()] = en
+                        eTargets.insert(en)
+                    }
+                }
+                if !zh.isEmpty && !en.isEmpty {
+                    if e.direction != 2 && zh2en[zh] == nil { zh2en[zh] = en }
+                    if e.direction != 1 {
+                        if en.rangeOfCharacter(from: .uppercaseLetters) != nil {
+                            if en2zhCase[en] == nil { en2zhCase[en] = zh }
+                        } else if en2zhNoCase[en.lowercased()] == nil {
+                            en2zhNoCase[en.lowercased()] = zh
+                        }
+                    }
+                } else if !zh.isEmpty {
+                    zhOnly.insert(zh)
+                } else {
+                    enOnly.insert(en)
+                }
+                if src.today && !zh.isEmpty && !today.contains(zh) { today.append(zh) }
+                let useFuzzy = fuzzyMode == "all" || (fuzzyMode == "today" && src.today)
+                if useFuzzy && zh.count >= fuzzyMinLength, let key = pinyinKey(zh) {
+                    var table = fz[zh.count] ?? [:]
+                    if let old = table[key] {
+                        // 同一个文件里两个词读音一样：分不清，不自动纠正
+                        if old.term != zh && old.prio == prio { table[key] = (term: "", prio: prio) }
+                    } else {
+                        table[key] = (term: zh, prio: prio)
+                    }
+                    fz[zh.count] = table
+                }
+            }
+        }
+        // 只有中文（或只有英文）的词：保护它不被拆开替换；但别的文件里给了译名的词不算
+        zhOnly.subtract(zh2en.keys)
+        enOnly = enOnly.filter { en2zhCase[$0] == nil && en2zhNoCase[$0.lowercased()] == nil }
+        var fuzzy: [Int: [String: String]] = [:]
+        var fuzzyCount = 0
+        for (len, table) in fz {
+            var t: [String: String] = [:]
+            for (k, v) in table where !v.term.isEmpty {
+                t[k] = v.term
+                fuzzyCount += 1
+            }
+            if !t.isEmpty { fuzzy[len] = t }
+        }
+        self.summary = summary
+        self.problems = problems
+        self.todayTerms = today
+        self.beforeTranslation = beforeTranslation
+        self.zhFix = zhFix
+        self.enFix = enFix
+        self.zh2en = zh2en
+        self.en2zhCase = en2zhCase
+        self.en2zhNoCase = en2zhNoCase
+        self.englishWords = englishWords
+        self.fuzzy = fuzzy
+        self.fuzzyCount = fuzzyCount
+        self.fuzzyLengths = fuzzy.keys.sorted(by: >)
+        self.protectedChars = protectedList.filter { !$0.isEmpty }.map { Array($0) }
+        self.zhFixRE = glossaryRegex(Array(zhFix.keys), latin: false, ignoreCase: false)
+        self.enFixRE = glossaryRegex(Array(enFix.keys), latin: true, ignoreCase: true)
+        self.zhBlockRE = glossaryRegex(Array(zTargets) + protectedList, latin: false, ignoreCase: false)
+        self.enBlockRE = glossaryRegex(Array(eTargets) + protectedList, latin: true, ignoreCase: true)
+        self.zh2enRE = glossaryRegex(Array(zh2en.keys), latin: false, ignoreCase: false)
+        self.zh2enBlockRE = glossaryRegex(Array(zhOnly) + protectedList, latin: false, ignoreCase: false)
+        self.en2zhCaseRE = glossaryRegex(Array(en2zhCase.keys), latin: true, ignoreCase: false)
+        self.en2zhNoCaseRE = glossaryRegex(Array(en2zhNoCase.keys), latin: true, ignoreCase: true)
+        self.en2zhBlockRE = glossaryRegex(Array(enOnly) + protectedList, latin: true, ignoreCase: true)
+    }
+
+    /// 识别结果纠错：先按术语表第 3/4 列，再按今日术语的读音（只对中文）
+    func correct(_ text: String, language: String, fuzzyOK: Bool = true) -> (text: String, fixes: [CaptionFix]) {
+        var fixes: [CaptionFix] = []
+        if language.hasPrefix("zh") {
+            let r = glossaryReplace(text, zhFixRE, blockedBy: zhBlockRE) { self.zhFix[$0] }
+            fixes += r.pairs.map { CaptionFix(from: $0.0, to: $0.1, how: "表") }
+            let s = fuzzyOK ? fuzzyFix(r.text, fixes: &fixes) : r.text
+            return (s, fixes)
+        }
+        let r = glossaryReplace(text, enFixRE, blockedBy: enBlockRE) { self.enFix[$0.lowercased()] }
+        fixes += r.pairs.map { CaptionFix(from: $0.0, to: $0.1, how: "表") }
+        return (r.text, fixes)
+    }
+
+    /// 翻译前：把术语换成目标语言的译名
+    func prepareForTranslation(_ text: String, language: String) -> String {
+        guard beforeTranslation else { return text }
+        if language.hasPrefix("zh") {
+            let r = glossaryReplace(text, zh2enRE, blockedBy: zh2enBlockRE) { w in self.zh2en[w].map { " \($0) " } }
+            return r.pairs.isEmpty ? text : tidyMixedSpaces(r.text)
+        }
+        var s = glossaryReplace(text, en2zhCaseRE, blockedBy: en2zhBlockRE) { self.en2zhCase[$0] }.text
+        s = glossaryReplace(s, en2zhNoCaseRE, blockedBy: en2zhBlockRE) { self.en2zhNoCase[$0.lowercased()] }.text
+        return s
+    }
+
+    /// 这个英文名字的每个词都已经在术语表里（复查时用）
+    func knowsEnglish(_ name: String) -> Bool {
+        let words = name.lowercased().split(whereSeparator: { !$0.isLetter }).map(String.init)
+        return !words.isEmpty && words.allSatisfy { englishWords.contains($0) }
+    }
+
+    /// 和今日术语读音相同（不看声调）的几个字 → 换成术语。看起来像普通词语的（如“哥哥他”“八十八”）不改，只记成“可能”
+    private func fuzzyFix(_ text: String, fixes: inout [CaptionFix]) -> String {
+        guard let shortest = fuzzyLengths.last else { return text }
+        let chars = Array(text)
+        let n = chars.count
+        if n < shortest { return text }
+        let syl = chars.map { pinyinSyllable($0) }
+        var used = [Bool](repeating: false, count: n)
+        for p in protectedChars where p.count <= n {
+            var i = 0
+            while i + p.count <= n {
+                if Array(chars[i..<(i + p.count)]) == p {
+                    for k in i..<(i + p.count) { used[k] = true }
+                    i += p.count
+                } else {
+                    i += 1
+                }
+            }
+        }
+        var spans: [(Int, Int)]?
+        var reps: [(start: Int, len: Int, term: String)] = []
+        for len in fuzzyLengths where len <= n {
+            guard let table = fuzzy[len] else { continue }
+            var i = 0
+            while i + len <= n {
+                if used[i..<(i + len)].contains(true) {
+                    i += 1
+                    continue
+                }
+                var parts: [String] = []
+                for k in i..<(i + len) {
+                    guard let s = syl[k] else { break }
+                    parts.append(s)
+                }
+                guard parts.count == len, let term = table[parts.joined(separator: " ")] else {
+                    i += 1
+                    continue
+                }
+                let window = String(chars[i..<(i + len)])
+                if window != term {
+                    if spans == nil { spans = chineseWordSpans(text) }
+                    if CaptionGlossary.looksLikeWords(window, start: i, len: len, spans: spans ?? []) {
+                        fixes.append(CaptionFix(from: window, to: term, how: "可能"))
+                    } else {
+                        reps.append((start: i, len: len, term: term))
+                        fixes.append(CaptionFix(from: window, to: term, how: "拼音"))
+                    }
+                }
+                for k in i..<(i + len) { used[k] = true }
+                i += len
+            }
+        }
+        if reps.isEmpty { return text }
+        reps.sort { $0.start < $1.start }
+        var out = ""
+        var pos = 0
+        for r in reps {
+            out += String(chars[pos..<r.start])
+            out += r.term
+            pos = r.start + r.len
+        }
+        out += String(chars[pos..<n])
+        return out
+    }
+
+    /// 这几个字像是普通词语：全是数字，或里面有一个更短的词（“哥哥他”里的“哥哥”），或有词跨过边界
+    static func looksLikeWords(_ window: String, start: Int, len: Int, spans: [(Int, Int)]) -> Bool {
+        if window.allSatisfy({ numeralChars.contains($0) }) { return true }
+        let end = start + len
+        for (a, b) in spans {
+            if a >= start && b <= end && b - a < len { return true }
+            if (a < start && b > start) || (a < end && b > end) { return true }
+        }
+        return false
+    }
+}
+
+/// PDF 里的文字（找今天的专有名词用）
+func extractPDFText(_ url: URL) -> String {
+    guard let doc = PDFDocument(url: url) else { return "" }
+    if doc.isLocked && !doc.unlock(withPassword: "") { return "" }
+    return doc.string ?? ""
+}
+
+/// PDF 里“讲员：王约翰牧师”这类行里的名字
+func pdfSpeakerNames(_ text: String) -> [String] {
+    guard let re = try? NSRegularExpression(pattern: "(讲员|讲道|证道|讲台|主讲|讲者|主领|领会|领诗|领唱|司会|主席|司琴|伴奏|读经|启应|祷告|代祷|报告|翻译)\\s*[:：]\\s*([\\p{Han}·]{2,10})", options: []),
+          let title = try? NSRegularExpression(pattern: "(牧师|传道人|传道|长老|执事|弟兄|姊妹|姐妹|师母|博士|老师|同工|教授|宣教士|主任|先生|女士)", options: []) else { return [] }
+    let ns = text as NSString
+    var out: [String] = []
+    for m in re.matches(in: text, options: [], range: NSRange(location: 0, length: ns.length)) {
+        let s = ns.substring(with: m.range(at: 2))
+        let sn = s as NSString
+        var name = s
+        if let t = title.firstMatch(in: s, options: [], range: NSRange(location: 0, length: sn.length)) {
+            name = sn.substring(to: t.range.location)
+        } else if s.count > 4 {
+            continue      // 没有称呼又太长：多半连着后面的字，不可靠
+        }
+        if name.count >= 2 && name.count <= 4 && !out.contains(name) { out.append(name) }
+    }
+    return out
+}
+
+/// 今天 PDF 里出现的术语（照术语表）和名字 → 今日术语
+func findPDFTerms(_ texts: [String], in sources: [GlossarySource]) -> (entries: [GlossaryEntry], termCount: Int, nameCount: Int) {
+    let all = texts.joined(separator: "\n")
+    var seen = Set<String>()
+    var out: [GlossaryEntry] = []
+    var terms = 0
+    for src in sources {
+        for e in src.entries where e.zh.count >= 2 && !seen.contains(e.zh) && all.contains(e.zh) {
+            seen.insert(e.zh)
+            out.append(e)
+            terms += 1
+        }
+    }
+    var names = 0
+    for name in pdfSpeakerNames(all) where !seen.contains(name) {
+        seen.insert(name)
+        out.append(GlossaryEntry(zh: name, en: "", zhVariants: [], enVariants: [], direction: 0))
+        names += 1
+    }
+    return (out, terms, names)
+}
+
+/// 文件夹里符合规则的最新文件
+func newestFile(in folders: [URL], matching re: NSRegularExpression) -> (url: URL, mod: Date)? {
+    var best: (url: URL, mod: Date)?
+    for dir in folders {
+        guard let items = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey],
+                                                                       options: []) else { continue }
+        for u in items {
+            let name = u.lastPathComponent
+            guard re.firstMatch(in: name, options: [], range: NSRange(location: 0, length: (name as NSString).length)) != nil else { continue }
+            let mod = (try? u.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? Date.distantPast
+            if let b = best, b.mod >= mod { continue }
+            best = (url: u, mod: mod)
+        }
+    }
+    return best
+}
+
+// MARK: - 字幕记录复查
+
+struct TranscriptItem {
+    var time = ""
+    var language = "zh-CN"
+    var target = "en-US"
+    var raw = ""
+    var fixed = ""
+    var sent = ""
+    var translated = ""
+}
+
+/// 读字幕记录（transcript-yyyymmdd.txt）
+func parseTranscript(_ text: String) -> [TranscriptItem] {
+    var items: [TranscriptItem] = []
+    var cur: TranscriptItem?
+    var lang = "zh-CN"
+    var target = "en-US"
+    let langRE = try? NSRegularExpression(pattern: "（(zh-CN|en-US)→([A-Za-z-]*)）", options: [])
+    for line in text.components(separatedBy: .newlines) {
+        if line.hasPrefix("=====") {
+            if let c = cur { items.append(c) }
+            cur = nil
+            let ns = line as NSString
+            if let re = langRE, let m = re.firstMatch(in: line, options: [], range: NSRange(location: 0, length: ns.length)) {
+                lang = ns.substring(with: m.range(at: 1))
+                target = ns.substring(with: m.range(at: 2))
+            }
+        } else if line.hasPrefix("[") && line.hasSuffix("]") && line.count <= 12 {
+            if let c = cur { items.append(c) }
+            var it = TranscriptItem()
+            it.time = String(line.dropFirst().dropLast())
+            it.language = lang
+            it.target = target
+            cur = it
+        } else if var c = cur {
+            if line.hasPrefix("原：") {
+                c.raw = String(line.dropFirst(2))
+            } else if line.hasPrefix("改：") {
+                let body = line.dropFirst(2)
+                c.fixed = String(body.split(separator: "\t", maxSplits: 1, omittingEmptySubsequences: false).first ?? body)
+            } else if line.hasPrefix("送：") {
+                c.sent = String(line.dropFirst(2))
+            } else if line.hasPrefix("译：") {
+                c.translated = String(line.dropFirst(2))
+            }
+            cur = c
+        }
+    }
+    if let c = cur { items.append(c) }
+    return items.filter { !$0.raw.isEmpty }
+}
+
+let pinyinSyllables: Set<String> = Set("""
+ba bai ban bang bao bei ben beng bi bian biao bie bin bing bo bu ca cai can cang cao ce cen ceng cha chai chan chang \
+chao che chen cheng chi chong chou chu chua chuai chuan chuang chui chun chuo ci cong cou cu cuan cui cun cuo da dai dan \
+dang dao de dei den deng di dia dian diao die ding diu dong dou du duan dui dun duo ei en eng er fa fan fang fei fen feng \
+fo fou fu ga gai gan gang gao ge gei gen geng gong gou gu gua guai guan guang gui gun guo ha hai han hang hao he hei hen \
+heng hong hou hu hua huai huan huang hui hun huo ji jia jian jiang jiao jie jin jing jiong jiu ju juan jue jun ka kai kan \
+kang kao ke kei ken keng kong kou ku kua kuai kuan kuang kui kun kuo la lai lan lang lao le lei leng li lia lian liang liao \
+lie lin ling liu long lou lu luan lue lun luo lv ma mai man mang mao me mei men meng mi mian miao mie min ming miu mo mou \
+mu na nai nan nang nao ne nei nen neng ni nian niang niao nie nin ning niu nong nou nu nuan nue nuo nv ou pa pai pan pang \
+pao pei pen peng pi pian piao pie pin ping po pou pu qi qia qian qiang qiao qie qin qing qiong qiu qu quan que qun ran \
+rang rao re ren reng ri rong rou ru rua ruan rui run ruo sa sai san sang sao se sen seng sha shai shan shang shao she shei \
+shen sheng shi shou shu shua shuai shuan shuang shui shun shuo si song sou su suan sui sun suo ta tai tan tang tao te teng \
+ti tian tiao tie ting tong tou tu tuan tui tun tuo wa wai wan wang wei wen weng wo wu xi xia xian xiang xiao xie xin xing \
+xiong xiu xu xuan xue xun ya yan yang yao ye yi yin ying yo yong you yu yuan yue yun za zai zan zang zao ze zei zen zeng \
+zha zhai zhan zhang zhao zhe zhei zhen zheng zhi zhong zhou zhu zhua zhuai zhuan zhuang zhui zhun zhuo zi zong zou zu zuan \
+zui zun zuo ai an ang ao
+""".split(whereSeparator: { $0 == " " || $0 == "\n" }).map(String.init))
+
+/// 像拼音拼出来的词（如 Yuehan、Wang），多半是没认出的中文名字
+func isPinyinLike(_ word: String) -> Bool {
+    let w = Array(word.lowercased())
+    let n = w.count
+    guard n >= 2, w.allSatisfy({ $0 >= "a" && $0 <= "z" }) else { return false }
+    var ok = [Bool](repeating: false, count: n + 1)
+    ok[0] = true
+    for i in 0..<n where ok[i] {
+        for len in 2...6 where i + len <= n {
+            if pinyinSyllables.contains(String(w[i..<(i + len)])) { ok[i + len] = true }
+        }
+    }
+    return ok[n]
+}
+
+func isEnglishWord(_ w: String) -> Bool {
+    let r = NSSpellChecker.shared.checkSpelling(of: w, startingAt: 0, language: "en", wrap: false,
+                                                inSpellDocumentWithTag: 0, wordCount: nil)
+    return r.location == NSNotFound
+}
+
+/// 英文句子里的人名、地名（NaturalLanguage 认出来的，加上像拼音的大写词）
+func englishNameCandidates(_ text: String) -> [String] {
+    var out: [String] = []
+    let tagger = NLTagger(tagSchemes: [.nameType])
+    tagger.string = text
+    let range = text.startIndex..<text.endIndex
+    tagger.setLanguage(.english, range: range)
+    let opts: NLTagger.Options = [.omitWhitespace, .omitPunctuation, .joinNames]
+    tagger.enumerateTags(in: range, unit: .word, scheme: .nameType, options: opts) { tag, r in
+        if let tag = tag, tag == .personalName || tag == .placeName || tag == .organizationName {
+            let s = String(text[r])
+            if !out.contains(s) { out.append(s) }
+        }
+        return true
+    }
+    for w in text.split(whereSeparator: { !$0.isLetter }) {
+        let word = String(w)
+        guard let f = word.first, f.isUppercase, isPinyinLike(word), !isEnglishWord(word) else { continue }
+        if !out.contains(where: { $0.contains(word) }) { out.append(word) }
+    }
+    return out
+}
+
+typealias ReviewTranslate = (String) async -> String?
+
 // MARK: - 本机实时字幕：Apple 语音识别 + Apple 翻译（需要 macOS 26，并用 Xcode 26 编译）
 
 func languageName(_ id: String) -> String {
@@ -1278,8 +1987,15 @@ protocol LiveRecognizer: AnyObject {
     var retryAt: Date? { get }
     var statusText: String { get }
     var translationProblem: String? { get }
+    var translationStats: String { get }
+    var glossary: CaptionGlossary? { get set }
+    var sentenceMode: Bool { get set }          // 整句翻译：一句说完再翻
+    var sentenceMaxSeconds: Double { get set }  // 整句翻译最多等几秒
+    var sentencePause: Double { get set }       // 停顿几秒算一句说完
+    var highFidelity: Bool { get set }          // 高保真翻译（macOS 26.4，Apple Intelligence 可用时）
     var onUpdate: ((String, String) -> Void)? { get set }   // 原文、译文
     var onStatus: ((String) -> Void)? { get set }
+    var onRecord: ((CaptionRecord) -> Void)? { get set }    // 每一句（写字幕记录）
     func start(language: String, target: String, device: String, channel: Int)
     func stop()
     func clearIfIdle(after seconds: TimeInterval)
@@ -1298,14 +2014,78 @@ final class OnceFlag {
     var used = false
 }
 
+/// 建立 Apple 翻译会话（本机识别和字幕复查共用）
+@available(macOS 26.0, *)
+enum TranslatorFactory {
+    static func translationID(_ id: String) -> String {
+        if id.hasPrefix("zh") { return "zh-Hans" }
+        if id.hasPrefix("en") { return "en" }
+        return id
+    }
+
+    /// high = 高保真：macOS 26.4 起可用，Apple Intelligence 可用时用它的模型，否则自动用普通模型
+    @MainActor
+    static func make(source: String, target: String, high: Bool) async -> (session: TranslationSession?, problem: String?) {
+        let src = Locale.Language(identifier: translationID(source))
+        let dst = Locale.Language(identifier: translationID(target))
+        let status = await LanguageAvailability().status(from: src, to: dst)
+        switch status {
+        case .installed:
+            #if compiler(>=6.3)
+            if high {
+                if #available(macOS 26.4, *) {
+                    return (TranslationSession(installedSource: src, target: dst, preferredStrategy: .highFidelity), nil)
+                }
+            }
+            #endif
+            return (TranslationSession(installedSource: src, target: dst), nil)
+        case .supported:
+            return (nil, "翻译语言还没下载：系统设置 › 通用 › 语言与地区 › 翻译语言，下载中文（普通话）和英语")
+        case .unsupported:
+            return (nil, "不支持\(languageName(source))到\(languageName(target))的翻译")
+        @unknown default:
+            return (nil, "无法确定翻译语言的状态")
+        }
+    }
+}
+
 @available(macOS 26.0, *)
 final class LiveCaptionEngine: LiveRecognizer {
     private(set) var running = false
     private(set) var retryAt: Date?
     private(set) var statusText = "未启动"
     private(set) var translationProblem: String?
+    private(set) var translationStats = ""
+    var glossary: CaptionGlossary?
+    var sentenceMode = true
+    var sentenceMaxSeconds: Double = 7
+    var sentencePause: Double = 1.2
+    var highFidelity = true {
+        didSet {
+            guard highFidelity != oldValue, running, !target.isEmpty else { return }
+            Task { @MainActor in await self.setUpTranslator() }
+        }
+    }
     var onUpdate: ((String, String) -> Void)?
     var onStatus: ((String) -> Void)?
+    var onRecord: ((CaptionRecord) -> Void)?
+
+    /// 等着翻译的一句
+    private struct PendingUnit {
+        let time: Date
+        let raw: String
+        let fixed: String
+        let fixes: [CaptionFix]
+        let sent: String
+    }
+
+    private var buffer: [String] = []           // 整句翻译：还没送去翻译的识别段落（原文）
+    private var bufferStart = Date()
+    private var lastFinal = Date()
+    private var flushScheduled = false
+    private var pendingUnits: [PendingUnit] = []
+    private var durations: [Double] = []
+    private var translatedCount = 0
 
     private var generation = 0
     private var language = "zh-CN"
@@ -1323,7 +2103,6 @@ final class LiveCaptionEngine: LiveRecognizer {
     private var finals: [String] = []
     private var translations: [String] = []
     private var volatileText = ""
-    private var pending: [String] = []
     private var translating = false
     private var lastActivity = Date()
 
@@ -1354,9 +2133,11 @@ final class LiveCaptionEngine: LiveRecognizer {
     }
 
     func stop() {
+        flushOnStop()
         generation += 1
         let wasRunning = running
         running = false
+        flushScheduled = false
         startTask?.cancel()
         startTask = nil
         if let o = configObserver {
@@ -1376,9 +2157,21 @@ final class LiveCaptionEngine: LiveRecognizer {
         }
         analyzer = nil
         translator = nil
-        pending = []
         translating = false
         if wasRunning { setStatus("已停止") }
+    }
+
+    /// 停止时：还没翻译的句子也记进字幕记录
+    private func flushOnStop() {
+        if !buffer.isEmpty {
+            let raw = Self.join(buffer, zh: language.hasPrefix("zh"))
+            let c = glossary?.correct(raw, language: language) ?? (text: raw, fixes: [CaptionFix]())
+            onRecord?(CaptionRecord(time: bufferStart, language: language, raw: raw, fixed: c.text, fixes: c.fixes,
+                                    sent: "", translated: "", seconds: 0))
+            buffer = []
+        }
+        for u in pendingUnits { record(u, translated: "", seconds: 0) }
+        pendingUnits = []
     }
 
     private func fail(_ message: String, gen: Int, retryAfter: TimeInterval) {
@@ -1526,68 +2319,127 @@ final class LiveCaptionEngine: LiveRecognizer {
         if isFinal {
             volatileText = ""
             if !t.isEmpty {
-                finals.append(t)
+                let shown = glossary?.correct(t, language: language).text ?? t
+                finals.append(shown)
                 if finals.count > 30 { finals.removeFirst(finals.count - 30) }
-                if translator != nil {
-                    pending.append(t)
-                    if pending.count > 6 { pending.removeFirst(pending.count - 6) }
-                    if !translating { pumpTranslations() }
-                }
+                if buffer.isEmpty { bufferStart = Date() }
+                buffer.append(t)
+                lastFinal = Date()
+                checkFlush()
             }
         } else {
-            volatileText = t
+            // 还在变的文字：只按术语表改（读音纠正等这一段定下来再做）
+            volatileText = glossary?.correct(t, language: language, fuzzyOK: false).text ?? t
         }
         publish()
     }
 
+    /// 整句翻译：一句说完（句号、问号…）、停顿、或等太久，就把攒着的几段一起送去翻译。不是整句模式就每段马上送
+    private func checkFlush() {
+        guard !buffer.isEmpty else { return }
+        let joined = Self.join(buffer, zh: language.hasPrefix("zh"))
+        let now = Date()
+        let paused = volatileText.isEmpty && now.timeIntervalSince(lastFinal) >= sentencePause
+        let tooLong = now.timeIntervalSince(bufferStart) >= sentenceMaxSeconds
+        if !sentenceMode || Self.endsSentence(joined) || paused || tooLong {
+            flushBuffer()
+            return
+        }
+        if !flushScheduled {
+            flushScheduled = true
+            let gen = generation
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                guard let self = self, gen == self.generation else { return }
+                self.flushScheduled = false
+                self.checkFlush()
+            }
+        }
+    }
+
+    private func flushBuffer() {
+        guard !buffer.isEmpty else { return }
+        let raw = Self.join(buffer, zh: language.hasPrefix("zh"))
+        let time = bufferStart
+        buffer = []
+        let c = glossary?.correct(raw, language: language) ?? (text: raw, fixes: [CaptionFix]())
+        guard translator != nil else {
+            onRecord?(CaptionRecord(time: time, language: language, raw: raw, fixed: c.text, fixes: c.fixes,
+                                    sent: "", translated: "", seconds: 0))
+            return
+        }
+        let sent = glossary?.prepareForTranslation(c.text, language: language) ?? c.text
+        pendingUnits.append(PendingUnit(time: time, raw: raw, fixed: c.text, fixes: c.fixes, sent: sent))
+        while pendingUnits.count > 6 {
+            writeLog("⚠️ 本机翻译跟不上，跳过一句")
+            record(pendingUnits.removeFirst(), translated: "", seconds: 0)
+        }
+        if !translating { pumpTranslations() }
+    }
+
+    private func record(_ u: PendingUnit, translated: String, seconds: Double) {
+        onRecord?(CaptionRecord(time: u.time, language: language, raw: u.raw, fixed: u.fixed, fixes: u.fixes,
+                                sent: u.sent, translated: translated, seconds: seconds))
+    }
+
     @MainActor
     private func setUpTranslator() async {
-        translator = nil
-        translationProblem = nil
-        guard !target.isEmpty else { return }
-        let src = Locale.Language(identifier: Self.translationID(language))
-        let dst = Locale.Language(identifier: Self.translationID(target))
-        let status = await LanguageAvailability().status(from: src, to: dst)
-        switch status {
-        case .installed:
-            translator = TranslationSession(installedSource: src, target: dst)
-        case .supported:
-            translationProblem = "翻译语言还没下载：系统设置 › 通用 › 语言与地区 › 翻译语言，下载中文（普通话）和英语"
-        case .unsupported:
-            translationProblem = "不支持\(languageName(language))到\(languageName(target))的翻译"
-        @unknown default:
-            translationProblem = "无法确定翻译语言的状态"
+        guard !target.isEmpty else {
+            translator = nil
+            translationProblem = nil
+            return
         }
-        if let p = translationProblem { writeLog("⚠️ 本机翻译：\(p)") }
+        let r = await TranslatorFactory.make(source: language, target: target, high: highFidelity)
+        translator = r.session
+        translationProblem = r.problem
+        if let p = r.problem {
+            writeLog("⚠️ 本机翻译：\(p)")
+        } else {
+            writeLog("本机翻译：\(languageName(language)) → \(languageName(target))，" + (highFidelity ? "高保真（Apple Intelligence 可用时用它）" : "快速"))
+        }
+        if !pendingUnits.isEmpty && !translating { pumpTranslations() }
     }
 
     private func pumpTranslations() {
-        guard let tr = translator, !pending.isEmpty else {
+        guard let tr = translator, !pendingUnits.isEmpty else {
             translating = false
             return
         }
         translating = true
-        let text = pending.removeFirst()
+        let unit = pendingUnits.removeFirst()
         let gen = generation
         Task { @MainActor in
+            let t0 = Date()
             var out = ""
             do {
-                out = try await tr.translate(text).targetText
+                out = try await tr.translate(unit.sent).targetText
             } catch {
                 if self.translationProblem == nil {
                     self.translationProblem = "翻译出错：\(error.localizedDescription)"
                     writeLog("⚠️ 本机翻译出错：\(error.localizedDescription)")
                 }
             }
+            let secs = Date().timeIntervalSince(t0)
+            let t = out.replacingOccurrences(of: "[ \\t]{2,}", with: " ", options: .regularExpression)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            self.record(unit, translated: t, seconds: secs)
             guard gen == self.generation else { return }
-            let t = out.trimmingCharacters(in: .whitespacesAndNewlines)
             if !t.isEmpty {
+                self.noteDuration(secs)
                 self.translations.append(t)
                 if self.translations.count > 30 { self.translations.removeFirst(self.translations.count - 30) }
                 self.publish()
             }
             self.pumpTranslations()
         }
+    }
+
+    private func noteDuration(_ s: Double) {
+        durations.append(s)
+        if durations.count > 20 { durations.removeFirst(durations.count - 20) }
+        let avg = durations.reduce(0, +) / Double(durations.count)
+        translationStats = String(format: "翻译平均 %.2f 秒/句（最近 %ld 句）", avg, durations.count)
+        translatedCount += 1
+        if translatedCount % 25 == 0 { writeLog("本机翻译：\(translationStats)") }
     }
 
     private func publish() {
@@ -1618,10 +2470,16 @@ final class LiveCaptionEngine: LiveRecognizer {
         return s.count > max ? String(s.suffix(max)) : s
     }
 
-    static func translationID(_ id: String) -> String {
-        if id.hasPrefix("zh") { return "zh-Hans" }
-        if id.hasPrefix("en") { return "en" }
-        return id
+    static func join(_ parts: [String], zh: Bool) -> String {
+        return parts.joined(separator: zh ? "" : " ")
+    }
+
+    /// 以句号、问号、感叹号等结尾（后面的引号、括号不算）
+    static func endsSentence(_ s: String) -> Bool {
+        var t = Substring(s)
+        while let last = t.last, "”’」』)）\"' ".contains(last) { t = t.dropLast() }
+        guard let c = t.last else { return false }
+        return "。！？!?；;….".contains(c)
     }
 
     static func requestMicrophone() async -> Bool {
@@ -1880,6 +2738,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
     var gdriveRecords: [String: GDriveRecord] = [:]
     var gdriveWaitUntil: [String: Date] = [:]
     var gdriveRechecked = Set<Int>()
+    var termsFetchBusy = false
+
+    // 术语表 / 整句翻译 / 字幕记录
+    var glossary: CaptionGlossary?
+    var glossaryStamp = ""
+    var glossaryLoaded = false
+    var glossaryInfo = "术语表：未载入"
+    var glossaryProblems: [String] = []
+    var termsRule: NSRegularExpression?
+    let textQueue = DispatchQueue(label: "local.presenter.pdftext")
+    var pdfTexts: [String: (url: URL, mod: Date?, text: String)] = [:]
+    var pdfTextBusy = Set<String>()
+    var sentenceMode = true
+    var highFidelity = true
+    var transcriptHeaderPending = false
+    var reviewMode = false              // --review：只复查字幕记录，然后退出
+    var reviewArg: String?
+    var reviewBusy = false
 
     var pdfFolderURL: URL {
         return expandPath(cfg.pdfFolder, base: baseDir)
@@ -1912,6 +2788,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         writeLog("工作文件夹：\(baseDir.path)")
 
         loadConfig()
+        if reviewMode {
+            startReviewMode()
+            return
+        }
         applyEvents()
         compileRules()
         validateCaption()
@@ -1928,6 +2808,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         if let v = langArg { cfg.caption.apple.language = v }
         appleLanguage = cfg.caption.apple.language
         appleDisplay = cfg.caption.apple.display
+        sentenceMode = cfg.caption.apple.sentenceMode
+        highFidelity = cfg.caption.apple.translationQuality != "fast"
         setupRecognizer()
         if captionSource == "apple" && recognizer == nil {
             problems.append("本机识别需要 macOS 26，并用 Xcode 26 编译；字幕来源已改用 Kaleo")
@@ -1959,6 +2841,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
                 gdriveRechecked.insert(j)
             }
             startGDriveFetch(pdfKeys(), force: false, reason: "启动时下载今天的 PDF", announce: true)
+            startTermsFetch()
         }
         logSummary()
         periodicChecks()
@@ -2015,6 +2898,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
                 if let v = value(), let n = Int(v), n >= 0 { channelArg = n }
             case "--lang":
                 if let v = value() { langArg = v.lowercased().hasPrefix("en") ? "en-US" : "zh-CN" }
+            case "--review":
+                reviewMode = true
+                if i + 1 < args.count, !args[i + 1].hasPrefix("--") { reviewArg = value() }
             case "--apple":
                 captionSourceArg = "apple"
             case "--kaleo":
@@ -2117,6 +3003,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
                 if let v = a["channel"] as? Int, v >= 0, v <= 16 { cfg.caption.apple.channel = v }
                 if let v = a["display"] as? String, ["both", "translation", "original"].contains(v) { cfg.caption.apple.display = v }
                 if let v = a["clearAfterSeconds"] as? Double, v >= 0 { cfg.caption.apple.clearAfterSeconds = v }
+                if let v = a["sentenceMode"] as? Bool { cfg.caption.apple.sentenceMode = v }
+                if let v = a["sentenceMaxSeconds"] as? Double, v >= 1, v <= 30 { cfg.caption.apple.sentenceMaxSeconds = v }
+                if let v = a["sentencePauseSeconds"] as? Double, v >= 0.3, v <= 10 { cfg.caption.apple.sentencePauseSeconds = v }
+                if let v = a["translationQuality"] as? String { cfg.caption.apple.translationQuality = v.lowercased() == "fast" ? "fast" : "high" }
+                if let v = a["saveTranscript"] as? Bool { cfg.caption.apple.saveTranscript = v }
             }
             if let v = c["textSelector"] as? String { cfg.caption.textSelector = v.trimmingCharacters(in: .whitespaces) }
             if let v = c["color"] as? String, !v.isEmpty { cfg.caption.color = v }
@@ -2124,6 +3015,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
             if let v = c["overlay"] as? Bool { cfg.caption.overlay = v }
             if let v = c["pageZoom"] as? Double, v > 0 { cfg.caption.pageZoom = v }
             if let v = c["reloadIfStaleMinutes"] as? Double, v >= 0 { cfg.caption.reloadIfStaleMinutes = v }
+        }
+        if let g = obj["glossary"] as? [String: Any] {
+            if let v = g["enabled"] as? Bool { cfg.glossary.enabled = v }
+            if let v = g["files"] as? [String] {
+                cfg.glossary.files = v.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            }
+            if let v = g["beforeTranslation"] as? Bool { cfg.glossary.beforeTranslation = v }
+            if let v = g["fuzzy"] as? String, ["today", "all", "off"].contains(v) { cfg.glossary.fuzzy = v }
+            if let v = g["fuzzyMinLength"] as? Int, v >= 2, v <= 8 { cfg.glossary.fuzzyMinLength = v }
+            if let v = g["pdfTerms"] as? Bool { cfg.glossary.pdfTerms = v }
+            if let v = g["termsFile"] as? String, !v.isEmpty { cfg.glossary.termsFile = v }
+            if let v = g["fromGoogleDrive"] as? Bool { cfg.glossary.fromGoogleDrive = v }
         }
         if let hk = obj["hotkeys"] as? [String: Any] {
             for (k, v) in hk where !k.hasPrefix("_") {
@@ -2240,6 +3143,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
             } catch {
                 problems.append("PDF 规则“\(key)”不是有效的正则表达式：\(pattern)")
             }
+        }
+        termsRule = nil
+        if cfg.glossary.enabled {
+            let p = cfg.glossary.termsFile.replacingOccurrences(of: "{date}", with: date)
+            termsRule = try? NSRegularExpression(pattern: p, options: [.caseInsensitive])
+            if termsRule == nil { problems.append("glossary.termsFile 不是有效的正则表达式：\(cfg.glossary.termsFile)") }
         }
     }
 
@@ -2811,9 +3720,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         let folder = pdfFolderURL
         let date = pdfDateString()
         let r = rules
+        let tr = termsRule
+        let base = baseDir
+        let files = glossaryFileURLs()
         // 在后台线程读文件夹：第一次读“下载”时系统会弹权限请求，不会卡住画面
         scanQueue.async {
-            let result = scanPDFFolder(folder, date: date, rules: r)
+            let result = scanEverything(folder: folder, date: date, rules: r, termsRule: tr, baseDir: base, glossaryFiles: files)
             DispatchQueue.main.async {
                 self.scanFinished(result)
             }
@@ -2821,7 +3733,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
     }
 
     func rescanNow() {
-        scanFinished(scanPDFFolder(pdfFolderURL, date: pdfDateString(), rules: rules))
+        scanFinished(scanEverything(folder: pdfFolderURL, date: pdfDateString(), rules: rules, termsRule: termsRule,
+                                    baseDir: baseDir, glossaryFiles: glossaryFileURLs()))
     }
 
     func scanFinished(_ r: PDFScan) {
@@ -2849,6 +3762,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         if case .pdf(let key) = currentScene, pdfShownKey == nil, !waitingForDownload(key), showPDF(key) {
             writeLog("\(pdfName(key))：文件已找到，开始显示")
         }
+        // 术语表、今日术语文件改过 → 重新载入；今天的 PDF 换了 → 重新找 PDF 里的术语
+        if r.glossaryStamp != glossaryStamp || !glossaryLoaded {
+            let first = !glossaryLoaded
+            glossaryStamp = r.glossaryStamp
+            rebuildGlossary(first ? "载入" : "文件有变化，重新载入", announce: !first)
+        }
+        updatePDFTexts()
         if !launchHUDShown { showLaunchHUD() }
     }
 
@@ -3047,7 +3967,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
             let dt = e.at.timeIntervalSince(now)
             if dt <= lead {
                 gdriveRechecked.insert(j)
-                if dt > 0 { startGDriveFetch([e.show], force: false, reason: "\(pdfName(e.show)) 开始前再检查一次", announce: false) }
+                if dt > 0 {
+                    startGDriveFetch([e.show], force: false, reason: "\(pdfName(e.show)) 开始前再检查一次", announce: false)
+                    startTermsFetch()
+                }
             }
         }
     }
@@ -3232,6 +4155,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
                 self?.appleStatus = status
                 writeLog("本机识别：\(status)")
             }
+            r.onRecord = { [weak self] rec in self?.handleRecord(rec) }
+            r.sentenceMode = sentenceMode
+            r.sentenceMaxSeconds = cfg.caption.apple.sentenceMaxSeconds
+            r.sentencePause = cfg.caption.apple.sentencePauseSeconds
+            r.highFidelity = highFidelity
+            r.glossary = glossary
             recognizer = r
         }
         #endif
@@ -3246,6 +4175,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         appleTranslation = ""
         refreshCaptionDisplay()
         writeLog("本机识别：\(why)（\(languageName(appleLanguage))，输入 \(cfg.caption.apple.inputDevice)）")
+        transcriptHeaderPending = true
         r.start(language: appleLanguage, target: appleTargetFor(appleLanguage),
                 device: cfg.caption.apple.inputDevice, channel: cfg.caption.apple.channel)
     }
@@ -3397,6 +4327,466 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         }
     }
 
+    func setSentenceMode(_ on: Bool) {
+        sentenceMode = on
+        recognizer?.sentenceMode = on
+        if recognizer?.running == true { transcriptHeaderPending = true }
+        let msg = on ? "整句翻译：开（一句说完再翻，译文晚一两秒出来，更准）" : "整句翻译：关（每段马上翻）"
+        writeLog(msg)
+        var m = msg
+        if captionSource != "apple" { m += "\n（只对本机识别有效；现在的字幕来源是 Kaleo）" }
+        infoHUD.show(m, on: builtInScreen(), seconds: 3)
+    }
+
+    func setHighFidelity(_ on: Bool) {
+        guard on != highFidelity else { return }
+        highFidelity = on
+        recognizer?.highFidelity = on
+        if recognizer?.running == true { transcriptHeaderPending = true }
+        let msg = on ? "翻译质量：高保真（Apple Intelligence 可用时用它，否则自动用普通模型）" : "翻译质量：快速"
+        writeLog(msg)
+        infoHUD.show(msg, on: builtInScreen(), seconds: 3)
+    }
+
+    // MARK: 术语表
+
+    func rulePatternsTerms() -> String {
+        return termsRule?.pattern ?? "（无）"
+    }
+
+    func glossaryFileURLs() -> [URL] {
+        guard cfg.glossary.enabled else { return [] }
+        return cfg.glossary.files.map { expandPath($0, base: baseDir) }
+    }
+
+    /// 读术语表文件 + 今日术语文件 + 今天 PDF 里的术语，建立新的术语表
+    func buildGlossary(terms: URL?, pdfTexts texts: [String]) -> CaptionGlossary {
+        var problems: [String] = []
+        var fileSources: [GlossarySource] = []
+        var parts: [String] = []
+        for url in glossaryFileURLs() {
+            let name = url.lastPathComponent
+            guard FileManager.default.fileExists(atPath: url.path) else {
+                parts.append("\(name) 没有")
+                continue
+            }
+            guard let text = readTextFile(url) else {
+                problems.append("无法读取 \(name)")
+                continue
+            }
+            let p = parseGlossary(text, name: name)
+            problems += p.problems
+            fileSources.append(GlossarySource(name: name, entries: p.entries, protected: p.protected, today: false))
+            parts.append("\(name) \(p.entries.count) 条")
+        }
+        var sources: [GlossarySource] = []
+        var todayParts: [String] = []
+        if let t = terms {
+            if let text = readTextFile(t) {
+                let p = parseGlossary(text, name: t.lastPathComponent)
+                problems += p.problems
+                sources.append(GlossarySource(name: t.lastPathComponent, entries: p.entries, protected: p.protected, today: true))
+                todayParts.append("\(t.lastPathComponent) \(p.entries.count) 条")
+            } else {
+                problems.append("无法读取 \(t.lastPathComponent)")
+            }
+        }
+        if cfg.glossary.pdfTerms && !texts.isEmpty {
+            let found = findPDFTerms(texts, in: sources + fileSources)
+            if !found.entries.isEmpty {
+                sources.append(GlossarySource(name: "PDF", entries: found.entries, protected: [], today: true))
+                todayParts.append("PDF 里 \(found.termCount) 个术语" + (found.nameCount > 0 ? "、\(found.nameCount) 个名字" : ""))
+            }
+        }
+        sources += fileSources
+        var summary = "术语表：" + (parts.isEmpty ? "没有" : parts.joined(separator: "，"))
+        summary += "；今日术语：" + (todayParts.isEmpty ? "没有" : todayParts.joined(separator: "，"))
+        return CaptionGlossary(sources: sources, fuzzyMode: cfg.glossary.fuzzy, fuzzyMinLength: cfg.glossary.fuzzyMinLength,
+                               beforeTranslation: cfg.glossary.beforeTranslation, problems: problems, summary: summary)
+    }
+
+    func rebuildGlossary(_ why: String, announce: Bool = false) {
+        glossaryLoaded = true
+        guard cfg.glossary.enabled else {
+            glossary = nil
+            recognizer?.glossary = nil
+            glossaryInfo = "术语表：已关闭（config.json 的 glossary.enabled）"
+            return
+        }
+        let texts = pdfKeys().compactMap { pdfTexts[$0]?.text }
+        let g = buildGlossary(terms: scan.terms, pdfTexts: texts)
+        glossary = g
+        recognizer?.glossary = g
+        glossaryInfo = g.summary
+        if recognizer?.running == true { transcriptHeaderPending = true }
+        writeLog("术语表（\(why)）：\(g.summary)")
+        if !g.todayTerms.isEmpty { writeLog("今日术语：" + g.todayTerms.prefix(60).joined(separator: "、")) }
+        for p in g.problems.filter({ !glossaryProblems.contains($0) }).prefix(10) { writeLog("⚠️ 术语表：\(p)") }
+        glossaryProblems = g.problems
+        if announce {
+            var msg = "术语表已重新载入（下一句开始生效）\n\(g.summary)"
+            if !g.problems.isEmpty { msg += "\n⚠️ 有 \(g.problems.count) 行看不懂，详见日志" }
+            infoHUD.show(msg, on: builtInScreen(), seconds: 5)
+        }
+    }
+
+    /// 今天的 PDF 有新文件：后台读出文字，找里面的术语和名字
+    func updatePDFTexts() {
+        guard cfg.glossary.enabled, cfg.glossary.pdfTerms else { return }
+        for key in pdfKeys() {
+            guard let u = scan.matches[key] else { continue }
+            let mod = scan.mods[key]
+            if let old = pdfTexts[key], old.url == u, old.mod == mod { continue }
+            if pdfTextBusy.contains(key) { continue }
+            pdfTextBusy.insert(key)
+            textQueue.async {
+                let text = extractPDFText(u)
+                DispatchQueue.main.async {
+                    self.pdfTextBusy.remove(key)
+                    self.pdfTexts[key] = (url: u, mod: mod, text: text)
+                    writeLog("\(pdfName(key))：读出 PDF 文字 \(text.count) 字（找今天的专有名词用）")
+                    self.rebuildGlossary("\(pdfName(key)) 的 PDF")
+                }
+            }
+        }
+    }
+
+    /// 从 Google Drive 文件夹下载今日术语（terms-yyyymmdd：Google 表格、Google 文档或 csv/txt 文件），存到下载文件夹
+    func startTermsFetch() {
+        guard gdriveReady, let exe = gdriveExe, cfg.glossary.enabled, cfg.glossary.fromGoogleDrive,
+              let re = termsRule, !termsFetchBusy else { return }
+        termsFetchBusy = true
+        let job = GDriveJob(exe: exe, remote: cfg.gdrive.remote, folderId: cfg.gdrive.folderId, keys: ["terms"],
+                            rules: ["terms": re], dest: pdfFolderURL, known: gdriveRecords, force: false,
+                            exportFormats: "csv,txt", wantPDF: false, isOptional: true)
+        gdriveQueue.async {
+            let outcomes = runGDriveJob(job)
+            DispatchQueue.main.async {
+                self.termsFetchBusy = false
+                for o in outcomes {
+                    self.gdriveStatus["terms"] = o.message
+                    if let r = o.record { self.gdriveRecords["terms"] = r }
+                    if o.downloaded || !o.ok { writeLog("Google Drive 今日术语：\(o.message)") }
+                }
+                self.saveGDriveState()
+                self.rescanNow()
+            }
+        }
+    }
+
+    /// 用 TextEdit 打开（csv 用 Numbers 打开再保存会变成 .numbers）
+    func openInTextEdit(_ url: URL) {
+        if let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.TextEdit") {
+            NSWorkspace.shared.open([url], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration(), completionHandler: nil)
+        } else {
+            _ = NSWorkspace.shared.open(url)
+        }
+    }
+
+    // MARK: 字幕记录
+
+    var transcriptFolder: URL {
+        return baseDir.appendingPathComponent("transcripts", isDirectory: true)
+    }
+
+    func dayString(_ d: Date) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyyMMdd"
+        return f.string(from: d)
+    }
+
+    func transcriptURL(for d: Date) -> URL {
+        return transcriptFolder.appendingPathComponent("transcript-\(dayString(d)).txt")
+    }
+
+    func appendTranscript(_ s: String) {
+        guard cfg.caption.apple.saveTranscript else { return }
+        let url = transcriptURL(for: Date())
+        try? FileManager.default.createDirectory(at: transcriptFolder, withIntermediateDirectories: true, attributes: nil)
+        let data = Data(s.utf8)
+        if let h = try? FileHandle(forWritingTo: url) {
+            h.seekToEndOfFile()
+            h.write(data)
+            h.closeFile()
+        } else {
+            try? data.write(to: url)
+        }
+    }
+
+    func handleRecord(_ r: CaptionRecord) {
+        if transcriptHeaderPending {
+            transcriptHeaderPending = false
+            appendTranscript(transcriptHeader())
+        }
+        appendTranscript(transcriptBlock(r))
+    }
+
+    func transcriptHeader() -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        let t = appleTargetFor(appleLanguage)
+        var s = "\n===== \(f.string(from: Date())) 本机识别：\(languageName(appleLanguage))"
+        s += t.isEmpty ? "，不翻译" : " → \(languageName(t))"
+        s += "（\(appleLanguage)→\(t)）"
+        s += " · 整句翻译" + (sentenceMode ? "开" : "关")
+        s += " · 翻译" + (highFidelity ? "高保真" : "快速")
+        if testMode { s += " · 测试模式" }
+        s += " =====\n\(glossaryInfo)\n"
+        if let g = glossary, !g.todayTerms.isEmpty { s += "今日术语：" + g.todayTerms.joined(separator: "、") + "\n" }
+        return s + "\n"
+    }
+
+    /// 一句的记录：原 = 识别原文；改 = 纠正后（Tab 后面是改了什么）；送 = 送去翻译的文字（术语已换成译名）；译 = 译文
+    func transcriptBlock(_ r: CaptionRecord) -> String {
+        var s = "[\(hms(r.time))]\n原：\(r.raw)\n"
+        let applied = r.fixes.filter { $0.how != "可能" }
+        let maybe = r.fixes.filter { $0.how == "可能" }
+        if r.fixed != r.raw || !maybe.isEmpty {
+            var notes = applied.map { "\($0.from)→\($0.to)" + ($0.how == "拼音" ? "（读音）" : "") }
+            notes += maybe.map { "可能是 \($0.from)→\($0.to)？" }
+            s += "改：\(r.fixed)"
+            if !notes.isEmpty { s += "\t【" + notes.joined(separator: "；") + "】" }
+            s += "\n"
+        }
+        if !r.sent.isEmpty && r.sent != r.fixed { s += "送：\(r.sent)\n" }
+        if !r.translated.isEmpty { s += "译：\(r.translated)\n" }
+        return s + "\n"
+    }
+
+    func newestTranscript() -> URL? {
+        guard let re = try? NSRegularExpression(pattern: "^transcript-[0-9]{8}\\.txt$", options: []) else { return nil }
+        return newestFile(in: [transcriptFolder], matching: re)?.url
+    }
+
+    // MARK: 字幕记录复查
+
+    /// open Presenter.app --args --review [20261115 | 文件]：不投影，只复查字幕记录，打开结果后退出
+    func startReviewMode() {
+        writeLog("复查模式（--review）")
+        highFidelity = cfg.caption.apple.translationQuality != "fast"
+        var file: URL?
+        if let a = reviewArg?.trimmingCharacters(in: .whitespaces), !a.isEmpty {
+            if a.count == 8, Int(a) != nil {
+                file = transcriptFolder.appendingPathComponent("transcript-\(a).txt")
+            } else {
+                file = expandPath(a, base: baseDir)
+            }
+        } else {
+            file = newestTranscript()
+        }
+        guard let f = file, FileManager.default.fileExists(atPath: f.path) else {
+            let msg = "没有找到字幕记录" + (file.map { "：\($0.path)" } ?? "（transcripts 文件夹是空的）")
+            writeLog("⚠️ " + msg)
+            infoHUD.show("Presenter 复查：\(msg)", on: builtInScreen() ?? NSScreen.main, seconds: 8)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 8) { NSApp.terminate(nil) }
+            return
+        }
+        runReview(f) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { NSApp.terminate(nil) }
+        }
+    }
+
+    /// 复查用的术语表：今天的记录用现在的术语表；其他日子的记录用那天的今日术语文件和 PDF（还在的话）
+    func glossaryForReview(day: String?) -> CaptionGlossary {
+        if day == nil || day == dayString(Date()), let g = glossary { return g }
+        var termsURL: URL?
+        var texts: [String] = []
+        if let d = day {
+            let p = DateFormatter()
+            p.locale = Locale(identifier: "en_US_POSIX")
+            p.dateFormat = "yyyyMMdd"
+            let f = DateFormatter()
+            f.locale = Locale(identifier: "en_US_POSIX")
+            f.dateFormat = cfg.dateFormat
+            if let date = p.date(from: d) {
+                let ds = NSRegularExpression.escapedPattern(for: f.string(from: date))
+                if cfg.glossary.enabled,
+                   let re = try? NSRegularExpression(pattern: cfg.glossary.termsFile.replacingOccurrences(of: "{date}", with: ds),
+                                                     options: [.caseInsensitive]) {
+                    termsURL = newestFile(in: [pdfFolderURL, baseDir], matching: re)?.url
+                }
+                if cfg.glossary.pdfTerms {
+                    for (_, pattern) in cfg.pdfPatterns {
+                        guard let re = try? NSRegularExpression(pattern: pattern.replacingOccurrences(of: "{date}", with: ds), options: []),
+                              let u = newestFile(in: [pdfFolderURL], matching: re)?.url else { continue }
+                        texts.append(extractPDFText(u))
+                    }
+                }
+            }
+        }
+        return buildGlossary(terms: termsURL, pdfTexts: texts)
+    }
+
+    @MainActor
+    func makeReviewTranslator(from source: String, to target: String) async -> ReviewTranslate? {
+        #if compiler(>=6.2)
+        if #available(macOS 26.0, *) {
+            let r = await TranslatorFactory.make(source: source, target: target, high: highFidelity)
+            if let session = r.session {
+                return { text in
+                    do {
+                        return try await session.translate(text).targetText
+                    } catch {
+                        return nil
+                    }
+                }
+            }
+        }
+        #endif
+        return nil
+    }
+
+    func runReview(_ file: URL, done: (() -> Void)? = nil) {
+        guard !reviewBusy else {
+            infoHUD.show("正在复查，请稍候…", on: builtInScreen() ?? NSScreen.main, seconds: 3)
+            return
+        }
+        guard let text = readTextFile(file) else {
+            infoHUD.show("无法读取 \(file.lastPathComponent)", on: builtInScreen() ?? NSScreen.main, seconds: 6)
+            done?()
+            return
+        }
+        reviewBusy = true
+        let items = parseTranscript(text)
+        let name = file.lastPathComponent
+        var day: String?
+        if let re = try? NSRegularExpression(pattern: "([0-9]{8})", options: []),
+           let m = re.firstMatch(in: name, options: [], range: NSRange(location: 0, length: (name as NSString).length)) {
+            day = (name as NSString).substring(with: m.range(at: 1))
+        }
+        let g = glossaryForReview(day: day)
+        infoHUD.show("正在复查 \(name)（\(items.count) 句）…\n有变化的句子要重新翻译，可能要一两分钟", on: builtInScreen() ?? NSScreen.main, seconds: nil)
+        Task { @MainActor in
+            let report = await self.makeReview(items: items, glossary: g, file: file)
+            let out = file.deletingLastPathComponent().appendingPathComponent(name.replacingOccurrences(of: "transcript-", with: "review-"))
+            do {
+                try report.write(to: out, atomically: true, encoding: .utf8)
+                writeLog("复查完成：\(out.path)")
+                self.infoHUD.show("复查完成：\(out.lastPathComponent)\n（已用 TextEdit 打开）", on: self.builtInScreen() ?? NSScreen.main, seconds: 5)
+                self.openInTextEdit(out)
+            } catch {
+                writeLog("⚠️ 无法保存复查结果：\(error.localizedDescription)")
+                self.infoHUD.show("⚠️ 无法保存复查结果：\(error.localizedDescription)", on: self.builtInScreen() ?? NSScreen.main, seconds: 8)
+            }
+            self.reviewBusy = false
+            done?()
+        }
+    }
+
+    /// 生成复查报告：没认出的名字、自动纠正了什么、用现在的术语表重新处理后有变化的句子
+    @MainActor
+    func makeReview(items: [TranscriptItem], glossary g: CaptionGlossary, file: URL) async -> String {
+        var translators: [String: ReviewTranslate] = [:]
+        var noTranslator = Set<String>()
+        var changed: [String] = []
+        var fixStats: [String: (count: Int, example: String)] = [:]
+        var fixOrder: [String] = []
+        var maybeStats: [String: (count: Int, example: String)] = [:]
+        var maybeOrder: [String] = []
+        var names: [String: (count: Int, example: String)] = [:]
+        var nameOrder: [String] = []
+        var translatedCount = 0
+        var retranslated = 0
+        let stop: Set<String> = ["god", "jesus", "christ", "lord", "holy spirit", "bible", "amen", "father", "spirit", "sunday"]
+        for it in items {
+            let c = g.correct(it.raw, language: it.language)
+            for f in c.fixes {
+                let key = "\(f.from) → \(f.to)"
+                let ex = "[\(it.time)] \(it.raw)"
+                if f.how == "可能" {
+                    if let v = maybeStats[key] { maybeStats[key] = (v.count + 1, v.example) } else { maybeStats[key] = (1, ex); maybeOrder.append(key) }
+                } else {
+                    let k = key + (f.how == "拼音" ? "（读音相同）" : "（术语表）")
+                    if let v = fixStats[k] { fixStats[k] = (v.count + 1, v.example) } else { fixStats[k] = (1, ex); fixOrder.append(k) }
+                }
+            }
+            let oldFixed = it.fixed.isEmpty ? it.raw : it.fixed
+            var newTranslated = it.translated
+            if !it.target.isEmpty && !it.translated.isEmpty {
+                translatedCount += 1
+                let newSent = g.prepareForTranslation(c.text, language: it.language)
+                let oldSent = it.sent.isEmpty ? oldFixed : it.sent
+                if newSent != oldSent {
+                    let k = it.language + "→" + it.target
+                    if translators[k] == nil && !noTranslator.contains(k) {
+                        if let tr = await makeReviewTranslator(from: it.language, to: it.target) {
+                            translators[k] = tr
+                        } else {
+                            noTranslator.insert(k)
+                        }
+                    }
+                    if let tr = translators[k], let t = await tr(newSent) {
+                        newTranslated = t.trimmingCharacters(in: .whitespacesAndNewlines)
+                        retranslated += 1
+                    }
+                    var block = "[\(it.time)]\n  原：\(it.raw)\n"
+                    if c.text != oldFixed { block += "  旧改：\(oldFixed)\n  新改：\(c.text)\n" }
+                    block += "  新送：\(newSent)\n  旧译：\(it.translated)\n  新译：\(newTranslated == it.translated ? "（没有重新翻译）" : newTranslated)\n"
+                    changed.append(block)
+                }
+            } else if c.text != oldFixed {
+                changed.append("[\(it.time)]\n  原：\(it.raw)\n  旧改：\(oldFixed)\n  新改：\(c.text)\n")
+            }
+            // 英文里的人名、地名：普通话讲道看译文，英文讲道看原文
+            let english = it.language.hasPrefix("en") ? c.text : newTranslated
+            if !english.isEmpty {
+                for n in englishNameCandidates(english) where !g.knowsEnglish(n) && !stop.contains(n.lowercased()) {
+                    let other = it.language.hasPrefix("en") ? newTranslated : c.text
+                    let ex = "[\(it.time)] \(other)\n        \(english)"
+                    if let v = names[n] { names[n] = (v.count + 1, v.example) } else { names[n] = (1, ex); nameOrder.append(n) }
+                }
+            }
+        }
+
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd HH:mm"
+        var r = "Presenter 字幕复查\n"
+        r += "字幕记录：\(file.lastPathComponent)（\(items.count) 句，其中翻译了 \(translatedCount) 句）\n"
+        r += "复查时间：\(f.string(from: Date()))\n"
+        r += "\(g.summary)\n"
+        if !g.todayTerms.isEmpty { r += "今日术语：" + g.todayTerms.joined(separator: "、") + "\n" }
+        r += """
+
+        怎么用（详见 README “提高翻译质量”一节）：
+          1. 看“一”：译文里没认出的名字 → 在 glossary.csv 加一行：中文,English
+          2. 看“二”：确认自动纠正没有改错。
+             “可能听错”里确实是听错的 → 把错的写法加到那个词的第 3 列（多个用 | 分开）
+             改错了的 → 在 glossary.csv 加一行：!那几个字（以后不再改）
+          3. 保存 glossary.csv，再复查一次，看“三”里新的结果对不对
+
+        """
+        r += "\n一、译文里的人名、地名（还不在术语表里，按出现次数）\n"
+        let sortedNames = nameOrder.sorted { (names[$0]?.count ?? 0) > (names[$1]?.count ?? 0) }
+        if sortedNames.isEmpty { r += "  （没有）\n" }
+        for n in sortedNames.prefix(80) {
+            guard let v = names[n] else { continue }
+            let pinyin = n.split(separator: " ").allSatisfy { isPinyinLike(String($0)) }
+            r += "  \(n) ×\(v.count)" + (pinyin ? "（像拼音：多半是没认出的中文名字）" : "") + "\n"
+            r += "     例：\(v.example)\n"
+        }
+        r += "\n二、自动纠正\n  已改：\n"
+        if fixOrder.isEmpty { r += "    （没有）\n" }
+        for k in fixOrder {
+            guard let v = fixStats[k] else { continue }
+            r += "    \(k) ×\(v.count)\n       例：\(v.example)\n"
+        }
+        r += "  可能听错（和今日术语读音相同，但看起来像普通词语，没有改）：\n"
+        if maybeOrder.isEmpty { r += "    （没有）\n" }
+        for k in maybeOrder {
+            guard let v = maybeStats[k] else { continue }
+            r += "    \(k)？ ×\(v.count)\n       例：\(v.example)\n"
+        }
+        r += "\n三、用现在的术语表重新处理，结果有变化的句子（\(changed.count) 句，重新翻译了 \(retranslated) 句）\n"
+        if !noTranslator.isEmpty { r += "  （本机翻译现在不可用，没有重新翻译）\n" }
+        if changed.isEmpty { r += "  （没有变化）\n" }
+        for b in changed.prefix(300) { r += b + "\n" }
+        if changed.count > 300 { r += "  ……还有 \(changed.count - 300) 句没有列出\n" }
+        return r
+    }
+
     // MARK: 快捷键
 
     func setupHotkeys() {
@@ -3475,6 +4865,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         case .showOriginal, .showTranslation, .showBoth:
             let mode = action == .showOriginal ? "original" : (action == .showTranslation ? "translation" : "both")
             setAppleDisplay(mode)
+            return
+        case .sentenceMode:
+            setSentenceMode(!sentenceMode)
             return
         case .captionLanguage:
             if captionSource != "apple" {
@@ -3673,6 +5066,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         } else if let t = hotkeyLabels[.caption] {
             lines.append("实时翻译：今天不自动显示（需要时按 \(t)）")
         }
+        if captionSource == "apple" && cfg.glossary.enabled { lines.append(glossaryInfo) }
         if hotkeyProblems > 0 { lines.append("快捷键：⚠️ 有冲突，详见菜单栏图标") }
         for p in problems { lines.append("⚠️ \(p)") }
         var control = "控制：点菜单栏图标"
@@ -3808,6 +5202,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         addAction(cm, .showBoth, "显示：原文 + 译文", #selector(menuAppleBoth), on: appleDisplay == "both")
         addAction(cm, .showTranslation, "显示：只显示译文", #selector(menuAppleTranslation), on: appleDisplay == "translation")
         addAction(cm, .showOriginal, "显示：只显示原文", #selector(menuAppleOriginal), on: appleDisplay == "original")
+        addAction(cm, .sentenceMode, "整句翻译（一句说完再翻，更准）", #selector(menuSentenceToggle), on: sentenceMode)
+        addAction(cm, nil, "翻译质量：高保真（Apple Intelligence 可用时）", #selector(menuQualityHigh), on: highFidelity)
+        addAction(cm, nil, "翻译质量：快速", #selector(menuQualityFast), on: !highFidelity)
+        if let st = recognizer?.translationStats, !st.isEmpty { addInfo(cm, st) }
+        // 术语表和字幕记录
+        let gItem = NSMenuItem(title: "术语表和字幕记录" + (glossaryProblems.isEmpty ? "" : " ⚠️"), action: nil, keyEquivalent: "")
+        let gm = NSMenu()
+        addInfo(gm, glossaryInfo)
+        if let g = glossary, !g.todayTerms.isEmpty {
+            let shown = g.todayTerms.prefix(12).joined(separator: "、")
+            addInfo(gm, "今日术语：" + shown + (g.todayTerms.count > 12 ? " 等 \(g.todayTerms.count) 个" : ""))
+        }
+        if gdriveReady && cfg.glossary.fromGoogleDrive, let st = gdriveStatus["terms"] { addInfo(gm, "Google Drive 今日术语：\(st)") }
+        if !glossaryProblems.isEmpty { addInfo(gm, "⚠️ 术语表有 \(glossaryProblems.count) 行看不懂（详见日志）") }
+        addAction(gm, nil, "打开教会术语表 glossary.csv", #selector(menuOpenGlossary))
+        if let t = scan.terms { addAction(gm, nil, "打开今日术语 \(t.lastPathComponent)", #selector(menuOpenTerms)) }
+        addAction(gm, nil, "重新载入术语表", #selector(menuReloadGlossary))
+        gm.addItem(NSMenuItem.separator())
+        addAction(gm, nil, "打开今天的字幕记录", #selector(menuOpenTranscript))
+        addAction(gm, nil, reviewBusy ? "正在复查…" : "复查最近的字幕记录（生成 review 文件）", #selector(menuReview))
+        addAction(gm, nil, "打开字幕记录文件夹", #selector(menuOpenTranscriptFolder))
+        gItem.submenu = gm
+        cm.addItem(gItem)
         addInfo(cm, "音频输入：\(cfg.caption.apple.inputDevice.isEmpty ? "系统默认输入" : cfg.caption.apple.inputDevice)"
                 + (cfg.caption.apple.channel > 0 ? "，第 \(cfg.caption.apple.channel) 路" : ""))
         if let names = recognizer?.inputNames(), !names.isEmpty {
@@ -3868,6 +5285,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
     @objc func menuAppleBoth() { setAppleDisplay("both") }
     @objc func menuAppleTranslation() { setAppleDisplay("translation") }
     @objc func menuAppleOriginal() { setAppleDisplay("original") }
+    @objc func menuSentenceToggle() { run(.sentenceMode) }
+    @objc func menuQualityHigh() { setHighFidelity(true) }
+    @objc func menuQualityFast() { setHighFidelity(false) }
+    @objc func menuOpenGlossary() {
+        let url = glossaryFileURLs().first ?? baseDir.appendingPathComponent("glossary.csv")
+        if !FileManager.default.fileExists(atPath: url.path) {
+            try? "中文,English,中文常被识别成,英文常被识别成,方向\n".write(to: url, atomically: true, encoding: .utf8)
+        }
+        openInTextEdit(url)
+    }
+    @objc func menuOpenTerms() {
+        if let t = scan.terms { openInTextEdit(t) }
+    }
+    @objc func menuReloadGlossary() {
+        rescanNow()
+        rebuildGlossary("手动重新载入", announce: true)
+    }
+    @objc func menuOpenTranscript() {
+        let url = transcriptURL(for: Date())
+        if FileManager.default.fileExists(atPath: url.path) {
+            openInTextEdit(url)
+        } else {
+            infoHUD.show("今天还没有字幕记录（本机识别开始后才有）", on: builtInScreen(), seconds: 4)
+        }
+    }
+    @objc func menuReview() {
+        if let u = newestTranscript() {
+            runReview(u)
+        } else {
+            infoHUD.show("还没有字幕记录（本机识别开始后才有）", on: builtInScreen(), seconds: 4)
+        }
+    }
+    @objc func menuOpenTranscriptFolder() {
+        try? FileManager.default.createDirectory(at: transcriptFolder, withIntermediateDirectories: true, attributes: nil)
+        _ = NSWorkspace.shared.open(transcriptFolder)
+    }
     @objc func menuCaptionAuto() { setCaptionOverride(nil) }
     @objc func menuCaptionOn() { setCaptionOverride(true) }
     @objc func menuCaptionOff() { setCaptionOverride(false) }
@@ -3882,6 +5335,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
     }
     @objc func menuGDriveFetch() {
         startGDriveFetch(pdfKeys(), force: true, reason: "手动重新下载", announce: true)
+        startTermsFetch()
     }
     @objc func menuGDriveOpen() {
         if let u = URL(string: "https://drive.google.com/drive/folders/\(cfg.gdrive.folderId)") { NSWorkspace.shared.open(u) }
@@ -3944,6 +5398,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         if gdriveReady, let exe = gdriveExe {
             writeLog("Google Drive：rclone = \(exe.path)；远程 \(cfg.gdrive.remote)；文件夹 \(cfg.gdrive.folderId)；下载到 \(pdfFolderURL.path)")
         }
+        writeLog("本机识别：整句翻译\(sentenceMode ? "开" : "关")（最多等 \(cfg.caption.apple.sentenceMaxSeconds) 秒，停顿 \(cfg.caption.apple.sentencePauseSeconds) 秒算一句）；翻译\(highFidelity ? "高保真" : "快速")；字幕记录\(cfg.caption.apple.saveTranscript ? "保存到 transcripts 文件夹" : "不保存")")
+        writeLog(cfg.glossary.enabled
+                 ? "术语表：\(cfg.glossary.files.joined(separator: "、"))；读音纠正 \(cfg.glossary.fuzzy)（\(cfg.glossary.fuzzyMinLength) 字以上）；今日术语文件 \(rulePatternsTerms())"
+                 : "术语表：已关闭")
         for line in hotkeyReport { writeLog("快捷键 " + line) }
         writeLog(obsSummary)
         for p in problems { writeLog("⚠️ " + p) }

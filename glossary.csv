@@ -1,0 +1,30 @@
+# 橡城华人希望教会 术语表（本机识别 + 翻译用）。用 TextEdit 编辑，保存后几秒内自动生效，不用重开 Presenter。
+# 每行一个词：中文,English,中文常被识别成,英文常被识别成,方向
+#   第 3 列：识别错的写法（看 transcripts 里的字幕记录找到），多个用 | 分开，例如：以利沙,Elisha,一粒沙|以利莎
+#   第 4 列：英文讲员时，英文识别错的写法
+#   第 5 列：方向，空 = 双向；中→英 = 只在中文翻英文时替换；英→中 = 只在英文翻中文时替换
+#   只写中文没有英文：不替换译名，只保护这个词不被拆开（例如人名）
+#   “!”开头的行：这几个字永远不自动改（例如读音纠正把“一粒沙”改错了，就加一行 !一粒沙）
+# 这里的词优先于 glossary-bible.csv（内置的圣经书卷、人名、地名）。
+# 每周只用一次的词（讲员名字、特别的经文人物）可以放在当天的 terms-yyyymmdd.csv 里，见 README。
+中文,English,中文常被识别成,英文常被识别成,方向
+
+# ── 教会 ──
+橡城华人希望教会,Oakville Chinese Hope Church
+希望教会,Hope Church
+橡城,Oakville
+
+# ── 牧者、同工（请改成真实的名字和英文写法） ──
+# 李牧师,Pastor Li
+# 王约翰牧师,Pastor John Wang
+
+# ── 团契、事工、聚会（请按教会实际补充） ──
+# 青年团契,Youth Fellowship
+# 姊妹会,Women's Fellowship
+
+# ── 本地地名 ──
+密西沙加,Mississauga
+多伦多,Toronto
+伯灵顿,Burlington
+汉密尔顿,Hamilton
+米尔顿,Milton
