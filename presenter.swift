@@ -215,7 +215,7 @@ struct AppleCaptionConfig {
 
 struct GlossaryConfig {
     var enabled = true
-    var files: [String] = ["glossary.csv", "glossary-bible.csv"]   // 前面的优先
+    var files: [String] = ["glossary-priv.csv", "glossary-bible.csv", "glossary.csv"]   // 前面的优先
     var beforeTranslation = true        // 翻译前把术语换成译名
     var fuzzy = "today"                 // 读音相同的自动纠正：today（只对今日术语）| all | off
     var fuzzyMinLength = 3              // 几个字以上的词才做读音纠正
@@ -227,7 +227,7 @@ struct GlossaryConfig {
 struct CaptionConfig {
     var source = "kaleo"                // kaleo（Kaleo 网页）| apple（本机识别 + 翻译）
     var apple = AppleCaptionConfig()
-    var url = "https://app.withkaleo.com/c/oakville-chinese-hope-church"
+    var url = ""                        // Kaleo 翻译网页，在 config-priv.json 的 caption.url 里填
     var when = "firstSunday"            // firstSunday | sunday | always | never
     var showDuring: [String] = ["pdf2"]
     var from = "10:40:00"               // 几点开始自动显示（空 = 画面一开始就显示）
@@ -1579,7 +1579,7 @@ let captionSourceJS = #"""
 
 // MARK: - 术语表：专有名词纠错 + 翻译前替换（本机识别用）
 //
-// 文件格式（glossary.csv、glossary-bible.csv、terms-yyyymmdd.csv/.txt 都一样）：
+// 文件格式（glossary.csv、glossary-bible.csv、glossary-priv.csv、terms-yyyymmdd.csv/.txt 都一样）：
 //   中文,English,中文常被识别成,英文常被识别成,方向
 //   - 第 3/4 列：识别错的写法，多个用 | 分开 → 识别出来后先改正（原文字幕也显示正确的字）
 //   - 翻译前把中文术语换成英文（或反过来），译名就固定了
@@ -1838,7 +1838,7 @@ final class CaptionGlossary {
 
     static let numeralChars: Set<Character> = Set("一二三四五六七八九十百千万亿零两几")
 
-    /// sources 按优先顺序排列：今日术语 → glossary.csv → glossary-bible.csv
+    /// sources 按优先顺序排列：今日术语 → glossary-priv.csv → glossary-bible.csv → glossary.csv
     init(sources: [GlossarySource], fuzzyMode: String, fuzzyMinLength: Int, beforeTranslation: Bool,
          problems: [String], summary: String) {
         var zhFix: [String: String] = [:]
@@ -3665,18 +3665,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         logFileURL = url
     }
 
-    func loadConfig() {
-        let url = baseDir.appendingPathComponent("config.json")
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            writeLog("没有找到 config.json，使用默认设置")
-            return
-        }
+    /// 读一个 JSON 设置文件；没有文件返回空，格式错误记入 problems
+    func readConfigFile(_ name: String) -> [String: Any]? {
+        let url = baseDir.appendingPathComponent(name)
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         guard let data = try? Data(contentsOf: url),
               let obj = (try? JSONSerialization.jsonObject(with: data, options: [])) as? [String: Any] else {
-            problems.append("config.json 格式有误，已使用默认设置")
-            writeLog("⚠️ config.json 无法解析（检查逗号、引号），使用默认设置")
-            return
+            problems.append("\(name) 格式有误，已忽略")
+            writeLog("⚠️ \(name) 无法解析（检查逗号、引号），已忽略")
+            return nil
         }
+        return obj
+    }
+
+    /// 把 over 合并进 base（同名的子设置逐项合并，其余以 over 为准）
+    func mergeConfig(_ base: [String: Any], _ over: [String: Any]) -> [String: Any] {
+        var r = base
+        for (k, v) in over where !k.hasPrefix("_") {
+            if let b = r[k] as? [String: Any], let o = v as? [String: Any] {
+                r[k] = mergeConfig(b, o)
+            } else {
+                r[k] = v
+            }
+        }
+        return r
+    }
+
+    func loadConfig() {
+        // config.json：放进仓库的公共设置；config-priv.json：本机/教会的私人设置（不进仓库），同名项覆盖 config.json
+        let pub = readConfigFile("config.json")
+        let priv = readConfigFile("config-priv.json")
+        if pub == nil { writeLog("没有找到（或无法读取）config.json，使用默认设置") }
+        if priv != nil { writeLog("已读取 config-priv.json") }
+        guard pub != nil || priv != nil else { return }
+        let obj = mergeConfig(pub ?? [:], priv ?? [:])
         if let arr = obj["schedule"] as? [[String: Any]] {
             var specs: [EventSpec] = []
             for item in arr {
@@ -4608,7 +4630,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         let g = cfg.gdrive
         guard g.enabled, !noGDrive else { return }
         if g.folderId.isEmpty {
-            let msg = "config.json 里 gdrive.folderId 还没填（Google Drive 文件夹 ID）"
+            let msg = "config-priv.json 里 gdrive.folderId 还没填（Google Drive 文件夹 ID）"
             gdriveSetupProblem = msg
             problems.append(msg)
             return
@@ -5597,11 +5619,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         r += """
 
         怎么用（详见 README “提高翻译质量”一节）：
-          1. 看“一”：译文里没认出的名字 → 在 glossary.csv 加一行：中文,English
+          1. 看“一”：译文里没认出的名字 → 在 glossary-priv.csv 加一行：中文,English
           2. 看“二”：确认自动纠正没有改错。
              “可能听错”里确实是听错的 → 把错的写法加到那个词的第 3 列（多个用 | 分开）
-             改错了的 → 在 glossary.csv 加一行：!那几个字（以后不再改）
-          3. 保存 glossary.csv，再复查一次，看“三”里新的结果对不对
+             改错了的 → 在 glossary-priv.csv 加一行：!那几个字（以后不再改）
+          3. 保存 glossary-priv.csv，再复查一次，看“三”里新的结果对不对
 
         """
         r += "\n一、译文里的人名、地名（还不在术语表里，按出现次数）\n"
@@ -6063,7 +6085,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         }
         if gdriveReady && cfg.glossary.fromGoogleDrive, let st = gdriveStatus["terms"] { addInfo(gm, "Google Drive 今日术语：\(st)") }
         if !glossaryProblems.isEmpty { addInfo(gm, "⚠️ 术语表有 \(glossaryProblems.count) 行看不懂（详见日志）") }
-        addAction(gm, nil, "打开教会术语表 glossary.csv", #selector(menuOpenGlossary))
+        addAction(gm, nil, "打开教会术语表 glossary-priv.csv", #selector(menuOpenGlossary))
         if let t = scan.terms { addAction(gm, nil, "打开今日术语 \(t.lastPathComponent)", #selector(menuOpenTerms)) }
         addAction(gm, nil, "重新载入术语表", #selector(menuReloadGlossary))
         gm.addItem(NSMenuItem.separator())
@@ -6145,7 +6167,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
     @objc func menuQualityHigh() { setHighFidelity(true) }
     @objc func menuQualityFast() { setHighFidelity(false) }
     @objc func menuOpenGlossary() {
-        let url = glossaryFileURLs().first ?? baseDir.appendingPathComponent("glossary.csv")
+        let url = glossaryFileURLs().first ?? baseDir.appendingPathComponent("glossary-priv.csv")
         if !FileManager.default.fileExists(atPath: url.path) {
             try? "中文,English,中文常被识别成,英文常被识别成,方向\n".write(to: url, atomically: true, encoding: .utf8)
         }

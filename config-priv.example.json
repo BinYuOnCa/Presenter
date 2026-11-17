@@ -1,0 +1,9 @@
+{
+  "_说明": "复制成 config-priv.json 再填（config-priv.json 不放进仓库）。这里写了的项会覆盖 config.json 里的同名项。folderId：Google Drive 文件夹网址里 folders/ 后面那一串；url：Kaleo 翻译网页。",
+  "gdrive": {
+    "folderId": ""
+  },
+  "caption": {
+    "url": "https://app.withkaleo.com/c/your-church"
+  }
+}

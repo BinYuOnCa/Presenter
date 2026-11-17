@@ -7,3 +7,7 @@ transcripts/
 Presenter.app/
 Presenter-ready.zip
 .DS_Store
+
+# 私人设置和教会术语表（教会名、同工姓名、Drive 文件夹 ID 等），不放进仓库
+config-priv.json
+glossary-priv.csv
