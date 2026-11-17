@@ -1,5 +1,6 @@
 {
   "_说明": "改完保存后，退出并重新打开 Presenter 才生效。时间为 24 小时制 HH:MM:SS。",
+  "_priv说明": "本机/教会的私人设置（Google Drive 文件夹 ID、Kaleo 翻译网页等）写在同一文件夹的 config-priv.json 里（不放进仓库，格式见 config-priv.example.json）。config-priv.json 里写了的项会覆盖这里的同名项，所以这里任何设置也都可以搬到 config-priv.json 里。",
 
   "_schedule说明": "show 可选：welcome（欢迎页）、clock（时钟）、countdown（倒计时，到下一项开始为止）、quit（退出程序），或下面 pdfs 里的名字。时间必须从早到晚排列。",
   "schedule": [
@@ -25,10 +26,9 @@
     "pdf2": "敬拜"
   },
 
-  "_gdrive说明": "启动时（以及每个 PDF 开始前 recheckBeforeMinutes 分钟）用 rclone 从 Google Drive 文件夹把今天的 Google Slides 导出成 PDF，存到上面的 pdfFolder（下载文件夹）。文件名规则同 pdfs。folderId：文件夹网址里 folders/ 后面那一串。remote：rclone config 时起的名字。rclone：留空 = 自动找（Presenter 文件夹里的 rclone 优先）。waitSeconds：PDF 到点时还在下载，最多等几秒。",
+  "_gdrive说明": "启动时（以及每个 PDF 开始前 recheckBeforeMinutes 分钟）用 rclone 从 Google Drive 文件夹把今天的 Google Slides 导出成 PDF，存到上面的 pdfFolder（下载文件夹）。文件名规则同 pdfs。folderId（写在 config-priv.json 里）：文件夹网址里 folders/ 后面那一串。remote：rclone config 时起的名字。rclone：留空 = 自动找（Presenter 文件夹里的 rclone 优先）。waitSeconds：PDF 到点时还在下载，最多等几秒。",
   "gdrive": {
     "enabled": true,
-    "folderId": "",
     "remote": "gdrive",
     "rclone": "",
     "recheckBeforeMinutes": 4,
@@ -42,7 +42,7 @@
     "warnFor": ["pdf1", "pdf2"]
   },
 
-  "_caption说明": "实时翻译字幕条。when：firstSunday（每月第一个星期天）、sunday（每个星期天）、always（每天）、never（只手动打开）。showDuring：哪些画面时显示；from/to：几点开始/停止自动显示（to 留空 = 到画面结束）。随时可按 ⌃⌥T 手动显示/隐藏。heightPercent：占投影高度的百分比。lines：显示几行。marginPercent：字幕左右各留白多少（占屏幕宽度的百分比）。字幕从左到右写，一行写满整行向上滚动。overlay：true = 叠加在 PDF 下部（PDF 保持全屏，做 PDF 时把这些页的下方 1/5 留白），false = PDF 缩到上方 4/5。background：颜色，或 transparent（透明，字直接显示在 PDF 留白处，带黑色描边）。mode：text（提取文字显示大字）或 page（直接显示原网页）。textSelector：一般留空（自动寻找），找得不准时填 CSS 选择器。",
+  "_caption说明": "实时翻译字幕条。url：Kaleo 翻译网页（写在 config-priv.json 里）。when：firstSunday（每月第一个星期天）、sunday（每个星期天）、always（每天）、never（只手动打开）。showDuring：哪些画面时显示；from/to：几点开始/停止自动显示（to 留空 = 到画面结束）。随时可按 ⌃⌥T 手动显示/隐藏。heightPercent：占投影高度的百分比。lines：显示几行。marginPercent：字幕左右各留白多少（占屏幕宽度的百分比）。字幕从左到右写，一行写满整行向上滚动。overlay：true = 叠加在 PDF 下部（PDF 保持全屏，做 PDF 时把这些页的下方 1/5 留白），false = PDF 缩到上方 4/5。background：颜色，或 transparent（透明，字直接显示在 PDF 留白处，带黑色描边）。mode：text（提取文字显示大字）或 page（直接显示原网页）。textSelector：一般留空（自动寻找），找得不准时填 CSS 选择器。",
   "_caption来源说明": "source：字幕来源，kaleo（Kaleo 网页）或 apple（本机识别 + 翻译），使用时可随时用 ⌃⌥S 或菜单切换。apple 里：language 识别语言 zh-CN（普通话）或 en-US（英语），用 ⌃⌥L 切换；translateTo：auto = 翻成另一种语言，none = 不翻译；inputDevice：音频输入设备名字（包含即可，留空 = 系统默认输入）；channel：0 = 混合所有输入，1 / 2 = 只用第 1 / 2 路输入；display：both（上面一行原文、下面译文）、translation（只显示译文）、original（只显示原文）；clearAfterSeconds：多少秒没人说话就清空字幕。",
   "_caption补标点说明": "autoPunctuation：按讲员的停顿自动补标点，zh = 只对普通话（默认），all = 普通话和英语，off = 不补；pauseComma：停顿几秒补逗号；pausePeriod：停顿几秒补句号。讲得快、标点太少就把两个数调小一点（例如 0.25 / 0.6），标点太多就调大。",
   "_caption翻译质量说明": "sentenceMode：true = 整句翻译（一句说完再翻，更准，译文晚一两秒；⌃⌥J 随时切换）；sentenceMaxSeconds：整句翻译最多等几秒；sentencePauseSeconds：停顿几秒算一句说完；translationQuality：high = 高保真（macOS 26.4 起，Apple Intelligence 打开时用它的模型，否则自动用普通模型），fast = 普通模型；saveTranscript：把识别和翻译存到 Presenter 文件夹的 transcripts/transcript-yyyymmdd.txt（复查、补充术语表用）。",
@@ -64,7 +64,6 @@
       "pauseComma": 0.3,
       "pausePeriod": 0.8
     },
-    "url": "https://app.withkaleo.com/c/oakville-chinese-hope-church",
     "when": "firstSunday",
     "showDuring": ["pdf2"],
     "from": "10:40:00",
@@ -94,10 +93,10 @@
     "color": "#ffffff"
   },
 
-  "_glossary说明": "术语表（只对本机识别有效）。files：术语表文件（在 Presenter 文件夹里，前面的优先）：glossary.csv 是教会自己的，glossary-bible.csv 是内置的圣经书卷/人名/地名。beforeTranslation：翻译前把术语换成固定的译名。fuzzy：读音相同的自动纠正，today = 只对今日术语，all = 对所有术语（容易改错，不建议），off = 不做。fuzzyMinLength：几个字以上的词才做读音纠正。pdfTerms：今天 PDF 里出现的术语和“讲员：xxx”这类名字算今日术语。termsFile：今日术语文件的名字规则（放在 Presenter 文件夹或下载文件夹）。fromGoogleDrive：也从 Google Drive 文件夹下载 terms-yyyymmdd（Google 表格 / Google 文档 / csv / txt）。改术语表文件后不用重开 Presenter，几秒内自动生效。",
+  "_glossary说明": "术语表（只对本机识别有效）。files：术语表文件（在 Presenter 文件夹里，前面的优先）：glossary-priv.csv 是教会自己的（牧者同工、团契等，不放进仓库），glossary-bible.csv 是圣经书卷/人名/地名/神学用语，glossary.csv 是一般用语（与圣经和本教会无关）；没有的文件会跳过。beforeTranslation：翻译前把术语换成固定的译名。fuzzy：读音相同的自动纠正，today = 只对今日术语，all = 对所有术语（容易改错，不建议），off = 不做。fuzzyMinLength：几个字以上的词才做读音纠正。pdfTerms：今天 PDF 里出现的术语和“讲员：xxx”这类名字算今日术语。termsFile：今日术语文件的名字规则（放在 Presenter 文件夹或下载文件夹）。fromGoogleDrive：也从 Google Drive 文件夹下载 terms-yyyymmdd（Google 表格 / Google 文档 / csv / txt）。改术语表文件后不用重开 Presenter，几秒内自动生效。",
   "glossary": {
     "enabled": true,
-    "files": ["glossary.csv", "glossary-bible.csv"],
+    "files": ["glossary-priv.csv", "glossary-bible.csv", "glossary.csv"],
     "beforeTranslation": true,
     "fuzzy": "today",
     "fuzzyMinLength": 3,

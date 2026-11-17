@@ -65,14 +65,15 @@ AirDrop 新的 `Presenter-ready.zip` 到 Air，在“下载”里解压，然后
 killall Presenter
 cp ~/Presenter/config.json ~/Presenter/config.old.json
 rm -rf ~/Presenter/Presenter.app
-cp -R ~/Downloads/Presenter/Presenter.app ~/Downloads/Presenter/config.json ~/Downloads/Presenter/README.md ~/Downloads/Presenter/glossary-bible.csv ~/Presenter/
-cp -n ~/Downloads/Presenter/glossary.csv ~/Presenter/
+cp -R ~/Downloads/Presenter/Presenter.app ~/Downloads/Presenter/config.json ~/Downloads/Presenter/README.md ~/Downloads/Presenter/glossary-bible.csv ~/Downloads/Presenter/glossary.csv ~/Presenter/
+cp -n ~/Downloads/Presenter/config-priv.json ~/Downloads/Presenter/glossary-priv.csv ~/Presenter/ 2>/dev/null
 xattr -dr com.apple.quarantine ~/Presenter
 rm -rf ~/Downloads/Presenter ~/Downloads/Presenter-ready.zip
 ```
 
-- 新的 `config.json` 覆盖了旧的：把 `config.old.json` 里自己改过的地方抄回去，至少要填 `gdrive.folderId` 和 `gdrive.remote`（Air 上是 `GoogleDrive`）。
-- `glossary.csv` 是教会自己的术语表，`cp -n` 只在第一次复制，以后不会被覆盖。
+- 新的 `config.json` 覆盖了旧的：把 `config.old.json` 里自己改过的地方抄回去（至少 `gdrive.remote`，Air 上是 `GoogleDrive`），或者写进 `config-priv.json`——那里的设置覆盖 `config.json`，升级不会丢。
+- `config-priv.json`（Drive 文件夹 ID、Kaleo 网页）和 `glossary-priv.csv`（教会术语表）不放进仓库，`cp -n` 只在第一次复制，以后不会被覆盖。
+- **从 v2.4 及以前升级**：先 `mv -n ~/Presenter/glossary.csv ~/Presenter/glossary-priv.csv` 保留旧的教会术语表；没有 `config-priv.json` 就按 `config-priv.example.json` 建一个，填 `gdrive.folderId` 和 `caption.url`。
 - **升级后一定先手动彩排一次**：每次重新编译后系统会再问一次“下载”文件夹等权限。不先点“允许”，周日自动启动时会卡在这个询问上。
 
 **每周日自动启动（crontab）**
@@ -91,7 +92,7 @@ bash autostart.sh status           # 查看当前设置；取消：bash autostar
 
 1. 把 `rclone` 放在 `~/Presenter/rclone`；被系统拦时运行 `xattr -d com.apple.quarantine ~/Presenter/rclone`。
 2. `~/Presenter/rclone config` 授权 Google 账号：scope 选 `drive.readonly`，填自己建的 client\_id / client\_secret；Google Cloud 里的应用要设为“正式版”（In production），否则 7 天后失效。
-3. `config.json` 的 `gdrive.folderId` 填 Drive 文件夹网址里 `folders/` 后面那一串；`gdrive.remote` 填 rclone 里的名字。
+3. `config-priv.json` 的 `gdrive.folderId` 填 Drive 文件夹网址里 `folders/` 后面那一串；`gdrive.remote` 填 rclone 里的名字。
 4. 周六晚上按明天的日期测试：`killall Presenter; open ~/Presenter/Presenter.app --args --test --date 20261122`，状态提示里 Google Drive 两个 PDF 都应是 ✅。
 
 ## 三、每周准备（周六）
@@ -213,7 +214,7 @@ Presenter 运行时在本机提供字幕网页 `http://127.0.0.1:8765/caption`�
 
 ## 六、主日后：字幕复查和术语表
 
-每个用了本机识别的主日后花 10–15 分钟复查一次字幕记录，把认错、翻错的词加进 `glossary.csv`，以后每次自动用上。
+每个用了本机识别的主日后花 10–15 分钟复查一次字幕记录，把认错、翻错的词加进 `glossary-priv.csv`，以后每次自动用上。
 
 **术语表格式**（用 TextEdit 编辑，保存后几秒内自动生效；不要用 Numbers 打开再保存）
 
@@ -228,7 +229,7 @@ Presenter 运行时在本机提供字幕网页 `http://127.0.0.1:8765/caption`�
 - 第 5 列：不填 = 双向；`中→英` = 只在中文翻英文时替换。
 - 只写中文不写英文：不指定译名，只保护这个词不被拆开。
 - `!` 开头的行（如 `!一粒沙`）：这几个字永远不自动改。`#` 开头是注释。
-- `glossary.csv`（教会自己的）优先于 `glossary-bible.csv`（内置的圣经书卷、人名、地名）。给内置的词加错误写法：在 `glossary.csv` 写同样的中文，英文也要写上。
+- 优先级：`glossary-priv.csv`（教会自己的：牧者同工、团契）> `glossary-bible.csv`（圣经书卷、人名、地名、神学用语）> `glossary.csv`（一般用语）。给后两个表里的词加错误写法：在 `glossary-priv.csv` 写同样的中文，英文也要写上。
 - 今日术语：当天 PDF 里出现的术语和“讲员：xxx”这类名字自动算；也可以用 `terms-日期` 表格（第三节）。今日术语还会做“读音相同就改”，但像“哥哥他”“八十八”这样的普通词语只记下来、不改。
 
 **复查步骤**
@@ -243,7 +244,7 @@ Presenter 运行时在本机提供字幕网页 `http://127.0.0.1:8765/caption`�
 4. **（可选）用 ⌘F 扫一眼字幕记录** `transcripts/transcript-日期.txt`，按下表处理。
 5. **保存后再复查一次**：看报告“三”里每句的旧译 / 新译，都对就完成。
 
-| 字幕记录里看到 | 是什么问题 | `glossary.csv` 里怎么写 |
+| 字幕记录里看到 | 是什么问题 | `glossary-priv.csv` 里怎么写 |
 | --- | --- | --- |
 | `原：……一里亚……`（应是以利亚） | 识别错（字错了） | `以利亚,Elijah,一里亚` |
 | `原` 对，`译` 里成了 Yi Liya | 翻译错 | `以利亚,Elijah` |
@@ -352,8 +353,8 @@ Presenter 运行时在本机提供字幕网页 `http://127.0.0.1:8765/caption`�
 | 反复提示“音频设备有变化” | 音频接口重新连接 | 检查 Maono 的 USB 线；按两次 `⌃⌥S` 重新开始；还不行换回 Kaleo |
 | 讲台声音里混着音乐，识别很差 | 两路输入混在一起 | 讲台麦只在第 1 路时，`caption.apple.channel` 设为 1 |
 | 译文太慢、Air 发热变慢 | 整句翻译或高保真占用时间 | `⌃⌥J` 关掉整句翻译；菜单 › 翻译质量：快速 |
-| 人名、地名认错或翻错 | 不在术语表里 | 加进 `glossary.csv` 或当天的 `terms-日期`（第六节） |
-| 自动纠正把对的词改错了 | 读音相同或第 3 列写法太常见 | `glossary.csv` 加一行 `!那个词`；或删掉那个第 3 列写法 |
+| 人名、地名认错或翻错 | 不在术语表里 | 加进 `glossary-priv.csv` 或当天的 `terms-日期`（第六节） |
+| 自动纠正把对的词改错了 | 读音相同或第 3 列写法太常见 | `glossary-priv.csv` 加一行 `!那个词`；或删掉那个第 3 列写法 |
 | 菜单显示“术语表有 N 行看不懂” | 格式不对，或用 Numbers 保存成了别的格式 | 看日志里的行号；用 TextEdit 改成 `中文,English,…` 格式 |
 | 翻译前替换让译文变别扭 | 中英夹杂的句子翻译得不好 | 给那个词只写中文；普遍如此就把 `glossary.beforeTranslation` 改成 `false` |
 | `--review` 没反应 | Presenter 已经在运行 | 用菜单 › 术语表和字幕记录 › 复查最近的字幕记录 |
@@ -406,7 +407,7 @@ killall Presenter; cd ~/Presenter && open Presenter.app --args --test
 
 ## 十一、config.json 设置速查
 
-改完 `config.json` 要退出并重新打开 Presenter 才生效（术语表文件不用重开）。用 TextEdit 编辑，引号要是英文直引号 `"`，不能是弯引号。
+改完 `config.json` 要退出并重新打开 Presenter 才生效（术语表文件不用重开）。私人设置（`gdrive.folderId`、`caption.url`）写在 `config-priv.json`，它里面写了的项覆盖 `config.json` 的同名项。用 TextEdit 编辑，引号要是英文直引号 `"`，不能是弯引号。
 
 | 设置 | 当前值 | 说明 |
 | --- | --- | --- |
@@ -414,7 +415,8 @@ killall Presenter; cd ~/Presenter && open Presenter.app --args --test
 | `pdfFolder` | `~/Downloads` | PDF 从哪里读 |
 | `pdfs.pdf1` / `pdfs.pdf2` | `^[A-Z][a-z]+-{date}\.pdf$` / `^{date}\.pdf$` | 文件名规则（正则），`{date}` = 当天 yyyymmdd |
 | `pdfNames` | 主日学、敬拜 | 菜单和提示里显示的名字 |
-| `gdrive.enabled` / `folderId` / `remote` | `true` / 文件夹 ID / `GoogleDrive` | Google Drive 下载；`folderId` 是网址 `folders/` 后面那一串 |
+| `gdrive.enabled` / `folderId` / `remote` | `true` / 文件夹 ID / `GoogleDrive` | Google Drive 下载；`folderId`（在 `config-priv.json`）是网址 `folders/` 后面那一串 |
+| `caption.url` | Kaleo 翻译网页 | 在 `config-priv.json` |
 | `gdrive.recheckBeforeMinutes` / `waitSeconds` | 4 / 60 | PDF 开始前几分钟再检查；到点还在下载时最多等几秒 |
 | `extend.minutes` / `warnSeconds` / `warnFor` | 2 / 60 / pdf1、pdf2 | 每次延长几分钟、提前几秒提醒、哪些画面提醒 |
 | `caption.source` | `kaleo` | 默认字幕来源，`apple` = 本机识别 |
@@ -432,7 +434,7 @@ killall Presenter; cd ~/Presenter && open Presenter.app --args --test
 | `caption.apple.translationQuality` | `high` | `high` = 高保真，`fast` = 快速 |
 | `caption.apple.saveTranscript` | `true` | 保存字幕记录到 `transcripts/` |
 | `caption.apple.autoPunctuation` / `pauseComma` / `pausePeriod` | `zh` / 0.3 / 0.8 | 按停顿补标点：`zh` 只对普通话 / `all` / `off`；停顿几秒补逗号、句号 |
-| `glossary.enabled` / `files` | `true` / glossary.csv、glossary-bible.csv | 术语表开关和文件（前面的优先） |
+| `glossary.enabled` / `files` | `true` / glossary-priv.csv、glossary-bible.csv、glossary.csv | 术语表开关和文件（前面的优先） |
 | `glossary.beforeTranslation` | `true` | 翻译前把术语换成译名 |
 | `glossary.fuzzy` / `fuzzyMinLength` | `today` / 3 | 读音纠正：只对今日术语 / `all` / `off`；几个字以上才做 |
 | `glossary.pdfTerms` / `termsFile` / `fromGoogleDrive` | `true` / `^terms-{date}\.(csv\|txt)$` / `true` | 从 PDF 找今日术语、今日术语文件名、从 Google Drive 下载 |
@@ -451,9 +453,11 @@ killall Presenter; cd ~/Presenter && open Presenter.app --args --test
 | --- | --- | --- |
 | `Presenter.app` | 程序 | 替换 |
 | `config.json` | 时间表、PDF 规则、Google Drive、延长、实时翻译、术语表设置、快捷键 | 替换，再把自己改过的抄回去 |
+| `config-priv.json` | 私人设置：Drive 文件夹 ID、Kaleo 网页（覆盖 `config.json` 的同名项） | **不要覆盖** |
 | `README.md` | 开发者写的完整说明 | 替换 |
-| `glossary.csv` | 教会自己的术语表 | **不要覆盖** |
-| `glossary-bible.csv` | 内置术语表：圣经书卷、人名、地名、教会用语 | 可以替换 |
+| `glossary-priv.csv` | 教会自己的术语表：教会名、牧者同工、团契（优先级最高） | **不要覆盖** |
+| `glossary-bible.csv` | 圣经术语表：圣经书卷、人名、地名、教会用语、神学用语 | 可以替换 |
+| `glossary.csv` | 一般术语表：与圣经和本教会无关的词（优先级最低） | 可以替换 |
 | `stage.html` | 欢迎页、时钟页、倒计时画面（文字、字号、颜色、留白） | 保留 |
 | `images/LogoNew.png` | Logo | 保留 |
 | `autostart.sh` | 设置/取消 crontab 自动启动 | 保留 |

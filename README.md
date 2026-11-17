@@ -50,13 +50,14 @@ AirDrop 新的 `Presenter-ready.zip` 到 Air，在“下载”里解压，然后
 killall Presenter
 rm -rf ~/Presenter/Presenter.app
 cp ~/Presenter/config.json ~/Presenter/config.old.json      # 备份旧设置
-cp -R ~/Downloads/Presenter/Presenter.app ~/Downloads/Presenter/config.json ~/Downloads/Presenter/README.md ~/Downloads/Presenter/glossary-bible.csv ~/Presenter/
-cp -n ~/Downloads/Presenter/glossary.csv ~/Presenter/      # 教会术语表：只在第一次复制（-n 不覆盖已有的）
+cp -R ~/Downloads/Presenter/Presenter.app ~/Downloads/Presenter/config.json ~/Downloads/Presenter/README.md ~/Downloads/Presenter/glossary-bible.csv ~/Downloads/Presenter/glossary.csv ~/Presenter/
+cp -n ~/Downloads/Presenter/config-priv.json ~/Downloads/Presenter/glossary-priv.csv ~/Presenter/ 2>/dev/null   # 私人设置、教会术语表：只在第一次复制（-n 不覆盖已有的）
 xattr -dr com.apple.quarantine ~/Presenter
 rm -rf ~/Downloads/Presenter ~/Downloads/Presenter-ready.zip
 ```
-只换 App、`config.json`、内置术语表 `glossary-bible.csv` 和说明；`images/LogoNew.png`、`stage.html`、教会自己的 `glossary.csv`、字幕记录、crontab 设置都不动。
-（如果你改过旧的 `config.json`，把改动抄到新的里；新的 `config.json` 里要填 `gdrive.folderId`，见第三节。）
+只换 App、`config.json`、术语表 `glossary-bible.csv` / `glossary.csv` 和说明；`images/LogoNew.png`、`stage.html`、私人设置 `config-priv.json`、教会术语表 `glossary-priv.csv`、字幕记录、crontab 设置都不动。
+（如果你改过旧的 `config.json`，把改动抄到新的里，或者直接写进 `config-priv.json`——那里的设置会覆盖 `config.json`，升级时不会丢。`gdrive.folderId` 写在 `config-priv.json` 里，见第三节。）
+**从 v2.4 及以前升级时**：旧的 `glossary.csv` 是教会自己的术语表，先改名保留：`mv -n ~/Presenter/glossary.csv ~/Presenter/glossary-priv.csv`，再运行上面的命令；`config-priv.json` 没有的话按 `config-priv.example.json` 建一个，填上 `gdrive.folderId` 和 `caption.url`。
 `~/Presenter/rclone` 和 rclone 的登录设置也都不受影响。
 
 **换上新版本后一定要先手动运行一次**（彩排即可），系统会再问一次能否访问“下载”文件夹，点“允许”；
@@ -95,7 +96,7 @@ Presenter 会把“含今天日期但不符合规则”的 PDF 列在状态提�
 1. **rclone 放在 Presenter 文件夹里**：`~/Presenter/rclone`（Presenter 会自动找到它）。第一次运行被系统拦时：`xattr -d com.apple.quarantine ~/Presenter/rclone`。
 2. **授权 Google 账号**：`~/Presenter/rclone config`，远程名字用 `gdrive`，scope 选 `drive.readonly`，填自己建的 client_id / client_secret。
    Google Cloud 里的应用要设为 **“正式版”（In production）**，否则授权 7 天后失效。
-3. **填文件夹 ID**：`config.json` 里 `"gdrive"` 的 `"folderId"`，填 Drive 文件夹网址里 `folders/` 后面那一串。
+3. **填文件夹 ID**：`config-priv.json`（私人设置，不放进仓库；没有就复制 `config-priv.example.json`）里 `"gdrive"` 的 `"folderId"`，填 Drive 文件夹网址里 `folders/` 后面那一串。
 4. **测试**（周六晚上，按明天的日期下载）：
    ```bash
    killall Presenter; open ~/Presenter/Presenter.app --args --test --date 20261115
@@ -201,12 +202,14 @@ Air 自己从 **Maono ProStudio 2x2 Lite**（和 OBS 同一个输入，互不影
 - 要真正用上：Air 的 系统设置 › Apple Intelligence 与 Siri，打开 Apple Intelligence（M1 支持；第一次要下载模型）。
 - 菜单里会显示“翻译平均 x 秒/句”。如果 Air 和 OBS 一起跑变慢、发热，或者译文太慢，改成“快速”。
 
-**3. 术语表**（`glossary.csv`、`glossary-bible.csv`，在 Presenter 文件夹里）
+**3. 术语表**（`glossary-priv.csv`、`glossary-bible.csv`、`glossary.csv`，在 Presenter 文件夹里）
 - 识别出来先**纠错**：第 3 列写了的错误写法会改成正确的字（投影上的原文也显示正确的字）。
 - 翻译前把中文术语**换成固定的英文译名**再翻译（英文讲员时反过来），译名就不会每次不一样。
-- `glossary-bible.csv`：内置的圣经 66 卷书名、常见人名、地名和教会用语（和合本 → NIV 译法），升级时可以直接覆盖。
-- `glossary.csv`：教会自己的词（教会名字、牧者同工、团契事工、本地地名），**优先于**内置的。里面已经放了教会名字和几个本地地名作例子，牧者同工的名字请按真实的改。
-- 用 **TextEdit** 编辑（菜单 › 实时翻译 › 术语表和字幕记录 › 打开教会术语表）。不要用 Numbers 打开再保存，会变成 `.numbers` 文件。也可以用 Excel 编辑后“另存为 CSV UTF-8”。
+三个术语表，优先级从高到低：
+- `glossary-priv.csv`：教会自己的词（教会名字、牧者同工姓名、团契事工），**不放进仓库**，优先级最高。里面已经放了教会名字作例子，牧者同工的名字请按真实的改。
+- `glossary-bible.csv`：圣经 66 卷书名、常见人名、地名和教会用语（和合本 → NIV 译法），以后还会加入常见神学用语；升级时可以直接覆盖。
+- `glossary.csv`：一般用语（与圣经和本教会无关，例如本地地名），优先级最低；升级时可以直接覆盖。
+- 用 **TextEdit** 编辑（菜单 › 实时翻译 › 术语表和字幕记录 › 打开教会术语表，打开的是 `glossary-priv.csv`）。不要用 Numbers 打开再保存，会变成 `.numbers` 文件。也可以用 Excel 编辑后“另存为 CSV UTF-8”。
 - **保存后几秒内自动生效**，不用重开 Presenter（正在识别时，下一句开始用新的术语表）。
 
 每行一个词，用逗号分开：
@@ -228,7 +231,7 @@ Air 自己从 **Maono ProStudio 2x2 Lite**（和 OBS 同一个输入，互不影
 每周的讲道会有一些只用这一次的名字。Presenter 把下面这些当成“今日术语”：
 - **今天 PDF 里出现的术语**：Presenter 读出主日学和敬拜 PDF 里的文字，术语表里的词出现在 PDF 里，就算今日术语；PDF 里“讲员：王约翰牧师”这类行里的名字也算。全自动，不用做什么。
 - **今日术语文件**（可选）：在 Google Drive 放 Slides 的那个文件夹里建一个 **Google 表格**，标题 `terms-20261122`（当天日期），A 列中文、B 列英文、C 列常被识别成。Presenter 启动时和敬拜前会和 PDF 一起把它下载到“下载”文件夹（`terms-20261122.csv`）。
-  也可以用 Google 文档（每行 `以利沙, Elisha` 或 `以利沙 Elisha`），或者直接把 `terms-20261122.csv` / `.txt` 放进 Presenter 文件夹或“下载”文件夹。格式和 `glossary.csv` 一样，而且优先于 `glossary.csv`。
+  也可以用 Google 文档（每行 `以利沙, Elisha` 或 `以利沙 Elisha`），或者直接把 `terms-20261122.csv` / `.txt` 放进 Presenter 文件夹或“下载”文件夹。格式和 `glossary-priv.csv` 一样，而且优先于所有术语表。
 
 今日术语多了一种纠正：**读音相同就自动改**（不看声调，三个字以上的词）。例如今天讲以利沙，识别成“衣里沙”会自动改成“以利沙”。
 但像“哥哥他”（各各他）、“八十八”（拔示巴）、“一粒沙”（以利沙）这样本身就是普通词语的，**不会自动改**，只在字幕记录里记成“可能是…？”，留给你复查时决定。
@@ -267,23 +270,23 @@ Air 自己从 **Maono ProStudio 2x2 Lite**（和 OBS 同一个输入，互不影
          Today, Pastor Wang Yuehan preached
 ```
 对每一个判断：
-- 是人名/地名，译文不对（像拼音、或译错了）→ 在 `glossary.csv` 加一行 `中文,正确的英文`。
+- 是人名/地名，译文不对（像拼音、或译错了）→ 在 `glossary-priv.csv` 加一行 `中文,正确的英文`。
 - 原文的字也听错了（例子里“约汉”应该是“约翰”）→ 同时把错的写法放进第 3 列：`王约翰牧师,Pastor John Wang,王约汉牧师`。
 - 译文本来就对（例如 Toronto）→ 不用管；想固定下来也可以加一行。
 - 只在这一次讲道出现的（例如客座讲员的家乡）→ 不加也行，或者下次放进当天的今日术语。
 
 **第 3 步：看“二、自动纠正”**
 - **已改**：确认每一条都改对了。
-  - 改错了（例如讲的是沙子，“一粒沙”却被改成“以利沙”）→ `glossary.csv` 加一行 `!一粒沙`，以后不再改。
+  - 改错了（例如讲的是沙子，“一粒沙”却被改成“以利沙”）→ `glossary-priv.csv` 加一行 `!一粒沙`，以后不再改。
   - 某个第 3 列的写法本身是常用词、老是误改 → 把它从第 3 列删掉。
 - **可能听错**（读音相同但像普通词语，没有改）：
   - 确实是听错，而且这个错误写法平时不会出现 → 加到那个词的第 3 列，例如 `以利亚,Elijah,一里亚`。
-  - 这个写法平时也会说（“哥哥他”“八十八”）→ 不要加到 `glossary.csv`，否则以后每次都会被改。不管它，或者只在讲那段经文的那周写进今日术语文件的第 3 列。
+  - 这个写法平时也会说（“哥哥他”“八十八”）→ 不要加到术语表，否则以后每次都会被改。不管它，或者只在讲那段经文的那周写进今日术语文件的第 3 列。
 
 **第 4 步：顺便扫一眼字幕记录本身**（可选）
 用 TextEdit 打开 `transcripts/transcript-20261115.txt`，按 ⌘F 搜关键的人名、地名，或者快速看几段 `原`/`译`：
 
-| 字幕记录里看到 | 是什么问题 | `glossary.csv` 里怎么写 |
+| 字幕记录里看到 | 是什么问题 | `glossary-priv.csv` 里怎么写 |
 |---|---|---|
 | `原：……一里亚……`（应是以利亚） | 识别错（字错了） | `以利亚,Elijah,一里亚`（这个词已经有一行就在那行第 3 列加，多个用 `\|` 分开） |
 | `原` 是对的，`译` 里成了 Yi Liya | 翻译错 | `以利亚,Elijah` |
@@ -291,10 +294,10 @@ Air 自己从 **Maono ProStudio 2x2 Lite**（和 OBS 同一个输入，互不影
 | `改` 把对的字改错了 | 误改 | `!那几个字` |
 | 英文讲员：`原：……Oak Ville……` | 英文识别错 | `橡城,Oakville,,Oak Ville` |
 
-内置的词（`glossary-bible.csv` 里有的）要加错误写法：在 `glossary.csv` 里写一行同样的中文，**英文也要写上**，例如 `以利沙,Elisha,一粒沙`（`glossary.csv` 优先）。
+`glossary-bible.csv` / `glossary.csv` 里已有的词要加错误写法：在 `glossary-priv.csv` 里写一行同样的中文，**英文也要写上**，例如 `以利沙,Elisha,一粒沙`（`glossary-priv.csv` 优先）。
 
 **第 5 步：保存，再复查一次**
-保存 `glossary.csv` 后，重复第 1 步。报告的“三、用现在的术语表重新处理，结果有变化的句子”会列出每一句的 `旧改/新改`、`新送`、`旧译/新译`（用新的术语表重新翻译过）：
+保存 `glossary-priv.csv` 后，重复第 1 步。报告的“三、用现在的术语表重新处理，结果有变化的句子”会列出每一句的 `旧改/新改`、`新送`、`旧译/新译`（用新的术语表重新翻译过）：
 - 新的都对 → 完成，下次自动用上。
 - 有新问题（例如某个词替换后译文反而别扭）→ 调整那一行，再复查。
 
@@ -440,6 +443,7 @@ macOS 15 起不允许只用 Option（⌥）或 Option+Shift 的全局快捷键�
 | `presenter.swift` | 程序源代码 |
 | `build.sh` | 编译成 `Presenter.app`，并打包 `Presenter-ready.zip` |
 | `config.json` | 时间表、PDF 文件夹和文件名规则、延长、实时翻译、术语表设置、快捷键 |
+| `config-priv.json` | 私人设置：Google Drive 文件夹 ID、Kaleo 翻译网页等，覆盖 `config.json` 的同名项（不放进仓库，格式见 `config-priv.example.json`） |
 | `stage.html` | 欢迎页、时钟页、倒计时画面 |
 | `images/` | 放 `LogoNew.png` |
 | `pdf/sample.pdf` | 仅测试模式使用 |
@@ -448,7 +452,8 @@ macOS 15 起不允许只用 Option（⌥）或 Option+Shift 的全局快捷键�
 | `gdrive-state.json` | 记录上次从 Google Drive 下载的版本（运行后生成，删掉也没关系） |
 | `presenter.log`、`cron.log` | 运行日志、自动启动记录（运行后生成） |
 | `caption-dump-*` | “保存网页结构和截图”生成的文件（调整实时翻译用） |
-| `glossary.csv` | 教会自己的术语表（教会名字、牧者同工、团契事工、地名；升级时不要覆盖） |
-| `glossary-bible.csv` | 内置术语表：圣经书卷、人名、地名、教会用语（升级时可以覆盖） |
+| `glossary-priv.csv` | 教会自己的术语表（教会名字、牧者同工、团契事工；优先级最高；不放进仓库，升级时不要覆盖） |
+| `glossary-bible.csv` | 圣经术语表：圣经书卷、人名、地名、教会用语、神学用语（升级时可以覆盖） |
+| `glossary.csv` | 一般术语表：与圣经和本教会无关的词，如本地地名（优先级最低；升级时可以覆盖） |
 | `terms-yyyymmdd.csv` | 当天的今日术语（可选；也可以放在“下载”里或 Google Drive） |
 | `transcripts/` | 本机识别的字幕记录 `transcript-日期.txt` 和复查报告 `review-日期.txt`（运行后生成） |

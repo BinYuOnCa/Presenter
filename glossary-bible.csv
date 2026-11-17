@@ -1,5 +1,6 @@
-# Presenter 内置术语表：圣经书卷、人名、地名和常用教会用语（和合本 → NIV 通用译法）
-# 升级 Presenter 时这个文件可以直接覆盖。教会自己的词请写在 glossary.csv 里（glossary.csv 优先）。
+# Presenter 圣经术语表：圣经书卷、人名、地名、常用教会用语，以后也会加入常见神学用语（和合本 → NIV 通用译法）
+# 升级 Presenter 时这个文件可以直接覆盖。教会自己的词（牧者同工、团契等）请写在 glossary-priv.csv 里。
+# 优先级：glossary-priv.csv > glossary-bible.csv（本文件）> glossary.csv（一般用语）。
 # 格式和 glossary.csv 一样：中文,English,中文常被识别成,英文常被识别成,方向
 #   方向：空 = 双向；中→英 = 只在中文翻英文时替换（书卷名用这个，免得英文讲员说 Job、Acts、Numbers 时被换成书卷名）
 # 有意没有收录的词（容易出现在普通句子里或有歧义）：雅各（Jacob/James）、犹大、路加、路得、提多、多加、西拉、以利、利亚、西面
