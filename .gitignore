@@ -1,13 +1,27 @@
 # 每台电脑自己的文件，不放进仓库
 rclone
+bin/
 presenter.log
 cron.log
 gdrive-state.json
 transcripts/
-Presenter.app/
-Presenter-ready.zip
+caption-dump-*
+terms-*.csv
+terms-*.txt
+config.old.json
+*.bak
 .DS_Store
 
-# 私人设置和教会术语表（教会名、同工姓名、Drive 文件夹 ID 等），不放进仓库
-config-priv.json
-glossary-priv.csv
+# 编译结果（发布在 release 分支上，见 build.sh --release）
+Presenter.app/
+Presenter-ready.zip
+
+# 这台电脑/本教会自己的设置和画面（*-local.*），不放进仓库
+*-local.*
+!*-local.example.*
+images/LogoNew.png
+
+# 凭证：Google 服务账号密钥等，绝不放进仓库或打包
+gdrive-sa.json
+*-sa.json
+*.key.json

@@ -199,7 +199,7 @@ func showLabel(_ show: String) -> String {
 struct AppleCaptionConfig {
     var language = "zh-CN"              // 识别语言：zh-CN（普通话）或 en-US（英语）
     var translateTo = "auto"            // auto = 翻成另一种；none = 不翻译
-    var inputDevice = "Maono ProStudio 2x2 Lite"
+    var inputDevice = ""                // 音频输入设备名字（包含即可）；空 = 系统默认输入
     var channel = 0                     // 0 = 混合所有输入；1、2 = 只用第几路输入
     var display = "both"                // both（原文 + 译文）| translation | original
     var clearAfterSeconds: Double = 15
@@ -215,7 +215,7 @@ struct AppleCaptionConfig {
 
 struct GlossaryConfig {
     var enabled = true
-    var files: [String] = ["glossary-priv.csv", "glossary-bible.csv", "glossary.csv"]   // 前面的优先
+    var files: [String] = ["glossary-local.csv", "glossary-bible.csv", "glossary.csv"]   // 前面的优先
     var beforeTranslation = true        // 翻译前把术语换成译名
     var fuzzy = "today"                 // 读音相同的自动纠正：today（只对今日术语）| all | off
     var fuzzyMinLength = 3              // 几个字以上的词才做读音纠正
@@ -227,7 +227,7 @@ struct GlossaryConfig {
 struct CaptionConfig {
     var source = "kaleo"                // kaleo（Kaleo 网页）| apple（本机识别 + 翻译）
     var apple = AppleCaptionConfig()
-    var url = ""                        // Kaleo 翻译网页，在 config-priv.json 的 caption.url 里填
+    var url = ""                        // Kaleo 翻译网页，在 config-local.json 的 caption.url 里填
     var when = "firstSunday"            // firstSunday | sunday | always | never
     var showDuring: [String] = ["pdf2"]
     var from = "10:40:00"               // 几点开始自动显示（空 = 画面一开始就显示）
@@ -402,8 +402,9 @@ func scanEverything(folder: URL, date: String, rules: [String: NSRegularExpressi
 struct GDriveConfig {
     var enabled = false
     var rclone = ""                     // 空 = 自动找（Presenter 文件夹里的 rclone 优先）
-    var remote = "gdrive"               // rclone config 里起的名字
+    var remote = "gdrive"               // rclone config 里起的名字（没有用服务账号时）
     var folderId = ""                   // Google Drive 文件夹网址里 folders/ 后面那一串
+    var serviceAccountFile = ""         // Google 服务账号的 JSON 密钥文件；填了就不用 rclone config
     var recheckBeforeMinutes: Double = 4
     var waitSeconds: Double = 60
 }
@@ -426,6 +427,7 @@ struct GDriveJob {
     var exportFormats = "pdf"           // Google 文档导出成什么格式（今日术语用 csv,txt）
     var wantPDF = true                  // 下载后检查是不是 PDF
     var isOptional = false              // 云端没有也不算问题（今日术语）
+    var extraArgs: [String] = []        // 额外的 rclone 参数（服务账号）
 }
 
 struct GDriveOutcome {
@@ -515,7 +517,7 @@ func isPDFFile(_ url: URL) -> Bool {
 
 /// 在 Google Drive 文件夹里找今天的 Slides，导出成 PDF 下载（在后台线程运行）
 func runGDriveJob(_ job: GDriveJob) -> [GDriveOutcome] {
-    let common = ["--drive-root-folder-id", job.folderId, "--drive-export-formats", job.exportFormats]
+    let common = ["--drive-root-folder-id", job.folderId, "--drive-export-formats", job.exportFormats] + job.extraArgs
     var entries: [[String: Any]] = []
     var listErr: String?
     for attempt in 1...3 {
@@ -1579,7 +1581,7 @@ let captionSourceJS = #"""
 
 // MARK: - 术语表：专有名词纠错 + 翻译前替换（本机识别用）
 //
-// 文件格式（glossary.csv、glossary-bible.csv、glossary-priv.csv、terms-yyyymmdd.csv/.txt 都一样）：
+// 文件格式（glossary.csv、glossary-bible.csv、glossary-local.csv、terms-yyyymmdd.csv/.txt 都一样）：
 //   中文,English,中文常被识别成,英文常被识别成,方向
 //   - 第 3/4 列：识别错的写法，多个用 | 分开 → 识别出来后先改正（原文字幕也显示正确的字）
 //   - 翻译前把中文术语换成英文（或反过来），译名就固定了
@@ -1838,7 +1840,7 @@ final class CaptionGlossary {
 
     static let numeralChars: Set<Character> = Set("一二三四五六七八九十百千万亿零两几")
 
-    /// sources 按优先顺序排列：今日术语 → glossary-priv.csv → glossary-bible.csv → glossary.csv
+    /// sources 按优先顺序排列：今日术语 → glossary-local.csv → glossary-bible.csv → glossary.csv
     init(sources: [GlossarySource], fuzzyMode: String, fuzzyMinLength: Int, beforeTranslation: Bool,
          problems: [String], summary: String) {
         var zhFix: [String: String] = [:]
@@ -3459,6 +3461,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
     let gdriveQueue = DispatchQueue(label: "local.presenter.gdrive")
     var noGDrive = false
     var gdriveExe: URL?
+    var gdriveRemote = "gdrive"         // rclone 远程名字；用服务账号时是 ":drive"
+    var gdriveExtraArgs: [String] = []  // 用服务账号时的 rclone 参数
     var gdriveReady = false
     var gdriveSetupProblem: String?
     var gdriveBusyKeys = Set<String>()
@@ -3692,13 +3696,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
     }
 
     func loadConfig() {
-        // config.json：放进仓库的公共设置；config-priv.json：本机/教会的私人设置（不进仓库），同名项覆盖 config.json
+        // config.json：放进仓库的公共设置；config-local.json：这台电脑/本教会自己的设置（不进仓库），同名项覆盖 config.json
         let pub = readConfigFile("config.json")
-        let priv = readConfigFile("config-priv.json")
+        let local = readConfigFile("config-local.json")
         if pub == nil { writeLog("没有找到（或无法读取）config.json，使用默认设置") }
-        if priv != nil { writeLog("已读取 config-priv.json") }
-        guard pub != nil || priv != nil else { return }
-        let obj = mergeConfig(pub ?? [:], priv ?? [:])
+        if local != nil { writeLog("已读取 config-local.json") }
+        guard pub != nil || local != nil else { return }
+        let obj = mergeConfig(pub ?? [:], local ?? [:])
         if let arr = obj["schedule"] as? [[String: Any]] {
             var specs: [EventSpec] = []
             for item in arr {
@@ -3736,6 +3740,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
                 cfg.gdrive.remote = v.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ":", with: "")
             }
             if let v = g["folderId"] as? String { cfg.gdrive.folderId = v.trimmingCharacters(in: .whitespaces) }
+            if let v = g["serviceAccountFile"] as? String { cfg.gdrive.serviceAccountFile = v.trimmingCharacters(in: .whitespaces) }
             if let v = g["recheckBeforeMinutes"] as? Double, v >= 0 { cfg.gdrive.recheckBeforeMinutes = v }
             if let v = g["waitSeconds"] as? Double, v >= 0 { cfg.gdrive.waitSeconds = v }
         }
@@ -4069,11 +4074,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
 
     func loadStage() {
         pageLoaded = false
-        let url = baseDir.appendingPathComponent("stage.html")
-        if FileManager.default.fileExists(atPath: url.path) {
+        // stage-local.html（本教会自己的画面，不进仓库）优先，没有再用 stage.html
+        let names = ["stage-local.html", "stage.html"]
+        if let url = names.map({ baseDir.appendingPathComponent($0) })
+                          .first(where: { FileManager.default.fileExists(atPath: $0.path) }) {
+            writeLog("欢迎/时钟画面：\(url.lastPathComponent)")
             webView.loadFileURL(url, allowingReadAccessTo: baseDir)
         } else {
-            writeLog("⚠️ 没找到 stage.html，使用内置的简易页面")
+            writeLog("⚠️ 没找到 stage-local.html 或 stage.html，使用内置的简易页面")
             webView.loadHTMLString(fallbackStageHTML, baseURL: nil)
         }
     }
@@ -4630,7 +4638,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         let g = cfg.gdrive
         guard g.enabled, !noGDrive else { return }
         if g.folderId.isEmpty {
-            let msg = "config-priv.json 里 gdrive.folderId 还没填（Google Drive 文件夹 ID）"
+            let msg = "config-local.json 里 gdrive.folderId 还没填（Google Drive 文件夹 ID）"
             gdriveSetupProblem = msg
             problems.append(msg)
             return
@@ -4648,9 +4656,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
             problems.append(msg)
             return
         }
+        if g.serviceAccountFile.isEmpty {
+            gdriveRemote = g.remote
+            gdriveExtraArgs = []
+        } else {
+            // 服务账号：不需要 rclone config，直接用临时远程 :drive:
+            let key = expandPath(g.serviceAccountFile, base: baseDir)
+            guard FileManager.default.fileExists(atPath: key.path) else {
+                let msg = "找不到服务账号密钥文件 \(key.path)（config-local.json 的 gdrive.serviceAccountFile）"
+                gdriveSetupProblem = msg
+                problems.append(msg)
+                return
+            }
+            gdriveRemote = ":drive"     // 加上 ":" 后是 rclone 的临时远程 ":drive:"
+            gdriveExtraArgs = ["--drive-service-account-file", key.path, "--drive-scope", "drive.readonly"]
+        }
         gdriveExe = exe
         gdriveReady = true
         loadGDriveState()
+    }
+
+    /// 日志和菜单里显示的连接方式
+    var gdriveAccountText: String {
+        return gdriveRemote.hasPrefix(":") ? "服务账号 \(cfg.gdrive.serviceAccountFile)" : "远程 \(gdriveRemote)"
     }
 
     var gdriveStateURL: URL {
@@ -4687,8 +4715,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         gdriveBusyKeys = Set(want)
         for k in want { gdriveStatus[k] = "下载中…" }
         writeLog("Google Drive：\(reason)（\(want.joined(separator: "、"))）")
-        let job = GDriveJob(exe: exe, remote: cfg.gdrive.remote, folderId: cfg.gdrive.folderId, keys: want,
-                            rules: rules, dest: pdfFolderURL, known: gdriveRecords, force: force)
+        let job = GDriveJob(exe: exe, remote: gdriveRemote, folderId: cfg.gdrive.folderId, keys: want,
+                            rules: rules, dest: pdfFolderURL, known: gdriveRecords, force: force,
+                            extraArgs: gdriveExtraArgs)
         gdriveQueue.async {
             let outcomes = runGDriveJob(job)
             DispatchQueue.main.async {
@@ -5324,9 +5353,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         guard gdriveReady, let exe = gdriveExe, cfg.glossary.enabled, cfg.glossary.fromGoogleDrive,
               let re = termsRule, !termsFetchBusy else { return }
         termsFetchBusy = true
-        let job = GDriveJob(exe: exe, remote: cfg.gdrive.remote, folderId: cfg.gdrive.folderId, keys: ["terms"],
+        let job = GDriveJob(exe: exe, remote: gdriveRemote, folderId: cfg.gdrive.folderId, keys: ["terms"],
                             rules: ["terms": re], dest: pdfFolderURL, known: gdriveRecords, force: false,
-                            exportFormats: "csv,txt", wantPDF: false, isOptional: true)
+                            exportFormats: "csv,txt", wantPDF: false, isOptional: true, extraArgs: gdriveExtraArgs)
         gdriveQueue.async {
             let outcomes = runGDriveJob(job)
             DispatchQueue.main.async {
@@ -5619,11 +5648,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         r += """
 
         怎么用（详见 README “提高翻译质量”一节）：
-          1. 看“一”：译文里没认出的名字 → 在 glossary-priv.csv 加一行：中文,English
+          1. 看“一”：译文里没认出的名字 → 在 glossary-local.csv 加一行：中文,English
           2. 看“二”：确认自动纠正没有改错。
              “可能听错”里确实是听错的 → 把错的写法加到那个词的第 3 列（多个用 | 分开）
-             改错了的 → 在 glossary-priv.csv 加一行：!那几个字（以后不再改）
-          3. 保存 glossary-priv.csv，再复查一次，看“三”里新的结果对不对
+             改错了的 → 在 glossary-local.csv 加一行：!那几个字（以后不再改）
+          3. 保存 glossary-local.csv，再复查一次，看“三”里新的结果对不对
 
         """
         r += "\n一、译文里的人名、地名（还不在术语表里，按出现次数）\n"
@@ -6085,7 +6114,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         }
         if gdriveReady && cfg.glossary.fromGoogleDrive, let st = gdriveStatus["terms"] { addInfo(gm, "Google Drive 今日术语：\(st)") }
         if !glossaryProblems.isEmpty { addInfo(gm, "⚠️ 术语表有 \(glossaryProblems.count) 行看不懂（详见日志）") }
-        addAction(gm, nil, "打开教会术语表 glossary-priv.csv", #selector(menuOpenGlossary))
+        addAction(gm, nil, "打开教会术语表 glossary-local.csv", #selector(menuOpenGlossary))
         if let t = scan.terms { addAction(gm, nil, "打开今日术语 \(t.lastPathComponent)", #selector(menuOpenTerms)) }
         addAction(gm, nil, "重新载入术语表", #selector(menuReloadGlossary))
         gm.addItem(NSMenuItem.separator())
@@ -6167,7 +6196,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
     @objc func menuQualityHigh() { setHighFidelity(true) }
     @objc func menuQualityFast() { setHighFidelity(false) }
     @objc func menuOpenGlossary() {
-        let url = glossaryFileURLs().first ?? baseDir.appendingPathComponent("glossary-priv.csv")
+        let url = glossaryFileURLs().first ?? baseDir.appendingPathComponent("glossary-local.csv")
         if !FileManager.default.fileExists(atPath: url.path) {
             try? "中文,English,中文常被识别成,英文常被识别成,方向\n".write(to: url, atomically: true, encoding: .utf8)
         }
@@ -6292,7 +6321,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         writeLog("字幕来源：\(captionSourceText())；本机识别：\(recognizer == nil ? appleStatus : "可用")；音频输入 \(cfg.caption.apple.inputDevice)")
         if let names = recognizer?.inputNames() { writeLog("这台 Mac 的音频输入：" + names.joined(separator: "、")) }
         if gdriveReady, let exe = gdriveExe {
-            writeLog("Google Drive：rclone = \(exe.path)；远程 \(cfg.gdrive.remote)；文件夹 \(cfg.gdrive.folderId)；下载到 \(pdfFolderURL.path)")
+            writeLog("Google Drive：rclone = \(exe.path)；\(gdriveAccountText)；文件夹 \(cfg.gdrive.folderId)；下载到 \(pdfFolderURL.path)")
         }
         writeLog("本机识别：整句翻译\(sentenceMode ? "开" : "关")（最多等 \(cfg.caption.apple.sentenceMaxSeconds) 秒，停顿 \(cfg.caption.apple.sentencePauseSeconds) 秒算一句）；翻译\(highFidelity ? "高保真" : "快速")；字幕记录\(cfg.caption.apple.saveTranscript ? "保存到 transcripts 文件夹" : "不保存")")
         writeLog("本机识别补标点：" + (cfg.caption.apple.autoPunctuation == "off" ? "关" :

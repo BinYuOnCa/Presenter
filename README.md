@@ -20,48 +20,71 @@
 
 ---
 
-## 一、编译（在有 Xcode 的 Mac 上）
+## 一、编译和发布（在有 Xcode 的 Mac 上）
 
 ```bash
-mv ~/Downloads/Presenter ~/        # 解压出来的文件夹放到主目录（已有旧的就先删掉或改名）
-cd ~/Presenter && bash build.sh
+git clone https://github.com/BinYuOnCa/Presenter.git ~/GitRepos/Presenter   # 源代码在 main 分支
+cd ~/GitRepos/Presenter
+./build.sh                  # 只编译，并打包 Presenter-ready.zip（给没有 git 的电脑用）
+./build.sh --release        # 编译 + 发布到 GitHub 的 release 分支，直播电脑运行 ./presenter.sh update 就能更新
 ```
-成功后主目录里会生成 `Presenter-ready.zip`（Apple 芯片版本，需要 macOS 11 及以上）。
-只有改了 `presenter.swift` 才需要重新编译；改 `stage.html`、`config.json`、Logo 不用。
+- `--release` 要求源代码已提交（发布的每个版本都写明对应的源代码版本 `main@提交号`），记得也 `git push` main。
+- release 分支只保留最近 10 个版本（`KEEP_RELEASES=20 ./build.sh --release` 可以改），所以仓库不会越来越大。
+  要更早的版本：`git checkout <提交号>` 切到那个源代码版本，重新 `./build.sh` 即可。
+- 发布和打包的内容只有：`Presenter.app`、`config.json`、`config-local.example.json`、`stage.html`、两个通用术语表、`presenter.sh`、说明文档。
+  **不含**任何 `*-local.*` 文件、服务账号密钥、rclone、日志和字幕记录。
+- 只有改了 `presenter.swift` 才需要重新编译；改 `config-local.json`、`stage-local.html`、术语表、Logo 不用。
 
-## 二、装到直播用的 MacBook Air
+## 二、装到直播用的 MacBook Air（或其他电脑）
+
+所有文件都在 `~/Presenter`。通用的文件来自 release 分支，`./presenter.sh update` 会更新它们；
+这台电脑/本教会自己的东西放在 **`*-local.*`** 文件里，更新时不会动：
+
+| 本机文件 | 内容 |
+|---|---|
+| `config-local.json` | 覆盖 `config.json` 的设置：Drive 文件夹 ID、服务账号密钥、Kaleo 网页、音频输入设备等（照 `config-local.example.json` 写） |
+| `glossary-local.csv` | 教会自己的术语表（教会名、牧者同工、团契） |
+| `stage-local.html` | 本教会的欢迎页、时钟页（从 `stage.html` 复制后修改；有它就不用 `stage.html`） |
+| `images/LogoNew.png` | Logo |
+| `gdrive-sa.json` | Google 服务账号密钥（凭证，**只**放在这台电脑上，见第三节） |
+| `rclone` | 从 Google Drive 下载用的工具 |
 
 ### 第一次安装
 
-1. AirDrop `Presenter-ready.zip` 到 Air，解压后放到主目录 `~/Presenter`。
-2. 终端运行：
+1. 装 git（Mac 自带的 git 第一次用要装命令行工具）：`xcode-select --install`
+2. 下载程序：
    ```bash
-   killall Presenter; xattr -dr com.apple.quarantine ~/Presenter
+   git clone --depth 1 -b release https://github.com/BinYuOnCa/Presenter.git ~/Presenter
    ```
-3. 把 `LogoNew.png` 放进 `~/Presenter/images/`。
-4. **彩排一次**（见第七节）。第一次运行时系统会问 **“Presenter 想访问‘下载’文件夹中的文件”**，点 **“好/允许”**。
+3. 把本机文件放进 `~/Presenter`（从旧电脑 AirDrop 过来，或按上表新建）：`config-local.json`、`glossary-local.csv`、`stage-local.html`、`images/LogoNew.png`；
+   再按第三节放 `rclone` 和 `gdrive-sa.json`。
+4. **彩排一次**：`~/Presenter/presenter.sh test tomorrow`。第一次运行时系统会问 **“Presenter 想访问‘下载’文件夹中的文件”**，点 **“好/允许”**。
 5. 系统设置 › 显示器：投影仪设为 **扩展显示器**（不要“镜像”）；建议内建屏作主显示器。
-6. 设置每周日 9:09 自动启动（见第六节）。
+6. 设置每周日自动启动：`~/Presenter/presenter.sh autostart on 09:05`（见第六节）。
 
-### 从旧版本升级（保留 Logo 和自己改过的 stage.html）
+### 升级
 
-AirDrop 新的 `Presenter-ready.zip` 到 Air，在“下载”里解压，然后终端运行：
 ```bash
-killall Presenter
-rm -rf ~/Presenter/Presenter.app
-cp ~/Presenter/config.json ~/Presenter/config.old.json      # 备份旧设置
-cp -R ~/Downloads/Presenter/Presenter.app ~/Downloads/Presenter/config.json ~/Downloads/Presenter/README.md ~/Downloads/Presenter/glossary-bible.csv ~/Downloads/Presenter/glossary.csv ~/Presenter/
-cp -n ~/Downloads/Presenter/config-priv.json ~/Downloads/Presenter/glossary-priv.csv ~/Presenter/ 2>/dev/null   # 私人设置、教会术语表：只在第一次复制（-n 不覆盖已有的）
-xattr -dr com.apple.quarantine ~/Presenter
-rm -rf ~/Downloads/Presenter ~/Downloads/Presenter-ready.zip
+~/Presenter/presenter.sh update
 ```
-只换 App、`config.json`、术语表 `glossary-bible.csv` / `glossary.csv` 和说明；`images/LogoNew.png`、`stage.html`、私人设置 `config-priv.json`、教会术语表 `glossary-priv.csv`、字幕记录、crontab 设置都不动。
-（如果你改过旧的 `config.json`，把改动抄到新的里，或者直接写进 `config-priv.json`——那里的设置会覆盖 `config.json`，升级时不会丢。`gdrive.folderId` 写在 `config-priv.json` 里，见第三节。）
-**从 v2.4 及以前升级时**：旧的 `glossary.csv` 是教会自己的术语表，先改名保留：`mv -n ~/Presenter/glossary.csv ~/Presenter/glossary-priv.csv`，再运行上面的命令；`config-priv.json` 没有的话按 `config-priv.example.json` 建一个，填上 `gdrive.folderId` 和 `caption.url`。
-`~/Presenter/rclone` 和 rclone 的登录设置也都不受影响。
+从 release 分支取最新版本，只替换通用的文件；`*-local.*`、Logo、凭证、rclone、字幕记录、crontab 都不动。
+通用的文件（如 `config.json`、`stage.html`）如果在本机改过，会先备份成 `.bak`，请把改动搬到对应的 `*-local` 文件里。
 
-**换上新版本后一定要先手动运行一次**（彩排即可），系统会再问一次能否访问“下载”文件夹，点“允许”；
+**从 v2.4 及以前（用 zip 安装的）改成用 git 升级**，在 Air 上运行一次：
+```bash
+cd ~/Presenter
+mv -n glossary.csv glossary-local.csv     # 旧的 glossary.csv 是教会自己的术语表
+mv -n stage.html stage-local.html         # 改过欢迎页/时钟页的话
+curl -fsSLO https://raw.githubusercontent.com/BinYuOnCa/Presenter/release/presenter.sh && chmod +x presenter.sh
+./presenter.sh update                     # 把这个文件夹接到 release 分支；改过的 config.json 备份成 config.json.bak
+```
+然后照 `config-local.example.json` 建 `config-local.json`，把 `config.json.bak` 里自己改过的设置（`gdrive.folderId`、`gdrive.remote`、音频输入等）写进去。
+已有的 crontab 不用重设。
+
+**换上新版本后一定要先手动运行一次**（`./presenter.sh test tomorrow`），系统会再问一次能否访问“下载”文件夹，点“允许”；
 否则周日自动启动时会卡在这个询问上。不小心点了“不允许”：系统设置 › 隐私与安全性 › 文件和文件夹 › Presenter，打开“下载文件夹”。
+
+没有 git 的电脑也可以用 `Presenter-ready.zip`：解压到 `~/Presenter`，运行 `xattr -dr com.apple.quarantine ~/Presenter`；升级时同样解压覆盖（`*-local.*` 不在 zip 里，不会被覆盖）。
 
 ## 三、PDF 从哪里来：Google Drive 自动下载
 
@@ -91,23 +114,34 @@ rm -rf ~/Downloads/Presenter ~/Downloads/Presenter-ready.zip
 注意：手动下载的 PDF，浏览器重复下载同名文件会变成 `20261025 (1).pdf`，**这种不会被使用**。
 Presenter 会把“含今天日期但不符合规则”的 PDF 列在状态提示和菜单里提醒你。
 
-### 一次性设置（已经做过 rclone 授权的话，只需要第 3、4 步）
+### 一次性设置
 
-1. **rclone 放在 Presenter 文件夹里**：`~/Presenter/rclone`（Presenter 会自动找到它）。第一次运行被系统拦时：`xattr -d com.apple.quarantine ~/Presenter/rclone`。
-2. **授权 Google 账号**：`~/Presenter/rclone config`，远程名字用 `gdrive`，scope 选 `drive.readonly`，填自己建的 client_id / client_secret。
-   Google Cloud 里的应用要设为 **“正式版”（In production）**，否则授权 7 天后失效。
-3. **填文件夹 ID**：`config-priv.json`（私人设置，不放进仓库；没有就复制 `config-priv.example.json`）里 `"gdrive"` 的 `"folderId"`，填 Drive 文件夹网址里 `folders/` 后面那一串。
+1. **rclone 放在 Presenter 文件夹里**：`~/Presenter/rclone`（Presenter 会自动找到它；也可以 `brew install rclone`）。第一次运行被系统拦时：`xattr -d com.apple.quarantine ~/Presenter/rclone`。
+2. **建 Google 服务账号**（推荐；不用登录、不会过期，而且只能看到共享给它的文件夹）：
+   1. [Google Cloud Console](https://console.cloud.google.com/) 新建（或选一个）项目 › “API 和服务” › 启用 **Google Drive API**。
+   2. “IAM 和管理” › 服务账号 › 创建服务账号（名字随意，不用给角色）。
+   3. 打开这个服务账号 › 密钥 › 添加密钥 › 创建新密钥 › JSON，下载的文件改名为 **`gdrive-sa.json`**，放进 `~/Presenter/`。
+      这个文件就是凭证：只放在直播电脑上，不要发到群里、不要放进仓库（`.gitignore` 已排除，`build.sh` 也不会打包它）。
+   4. 在 Google Drive 里把放 Slides 的那个文件夹 **共享** 给服务账号的邮箱（`xxx@项目名.iam.gserviceaccount.com`，在密钥文件的 `client_email` 里），权限“查看者”。
+3. **写进 `config-local.json`**（没有就复制 `config-local.example.json`）：
+   ```json
+   "gdrive": { "folderId": "Drive 文件夹网址里 folders/ 后面那一串", "serviceAccountFile": "gdrive-sa.json" }
+   ```
+   用了服务账号就**不需要** `rclone config`。
 4. **测试**（周六晚上，按明天的日期下载）：
    ```bash
-   killall Presenter; open ~/Presenter/Presenter.app --args --test --date 20261115
+   ~/Presenter/presenter.sh test tomorrow
    ```
    状态提示里 Google Drive pdf1、pdf2 应该是 ✅，“下载”里出现两个 PDF。
 
-**设置项**（`config.json` 的 `gdrive`）：`enabled`（false = 不下载）、`folderId`、`remote`（rclone 里的名字）、`rclone`（rclone 的位置，留空自动找）、
-`recheckBeforeMinutes`（开始前几分钟再检查，0 = 不检查）、`waitSeconds`（到点时最多等几秒）。下载到 `pdfFolder`（默认“下载”）。
+**不用服务账号**（旧做法，用自己的 Google 账号）：`~/Presenter/rclone config` 建一个远程（scope 选 `drive.readonly`，填自己建的 client_id / client_secret，
+Google Cloud 里的应用要设为“正式版”，否则 7 天后失效），然后在 `config-local.json` 里写 `"gdrive": { "folderId": "…", "remote": "远程名字" }`，不写 `serviceAccountFile`。
+授权失效时运行 `~/Presenter/rclone config reconnect 远程名字:` 重新登录。
 
-**授权失效时**（很少见：半年没用过、在 Google 账号里撤销了、应用没设成正式版）：状态里会显示连接 Google Drive 失败，运行一次
-`~/Presenter/rclone config reconnect gdrive:` 重新登录即可。撤销授权：Google 账号 › 安全 › 第三方连接。
+**设置项**（`gdrive`，本机的写在 `config-local.json`）：`enabled`（false = 不下载）、`folderId`、`serviceAccountFile`（服务账号密钥，相对于 Presenter 文件夹）、
+`remote`（不用服务账号时 rclone 里的名字）、`rclone`（rclone 的位置，留空自动找）、`recheckBeforeMinutes`（开始前几分钟再检查，0 = 不检查）、`waitSeconds`（到点时最多等几秒）。下载到 `pdfFolder`（默认“下载”）。
+
+**连不上时**：没联网；或者密钥被删了（Cloud Console 里重新建一个密钥替换 `gdrive-sa.json`）；或者文件夹没共享给服务账号的邮箱。
 
 菜单栏图标随时显示状态：`⏱9:10`（等待）→ `👋欢迎页` → `📄3/12`（第 3 页 / 共 12 页）→ `🕐时钟` → `⏳1:23` → `📄1/20💬`（💬 = 正在显示实时翻译）。
 延长时会显示到几点，如 `📄12/12→10:20`。图标前出现 **⚠️** 表示有问题，点开菜单看原因。
@@ -164,7 +198,7 @@ Air 自己从 **Maono ProStudio 2x2 Lite**（和 OBS 同一个输入，互不影
 1. **下载翻译语言**：系统设置 › 通用 › 语言与地区 › 翻译语言，下载 **中文（普通话）** 和 **英语**。
 2. **试一次**（用本机识别作字幕来源，每个 PDF 显示 5 分钟）：
    ```bash
-   killall Presenter; open ~/Presenter/Presenter.app --args --test --apple --pdftime 300
+   ~/Presenter/presenter.sh test --apple --pdftime 300
    ```
    预览窗出现后按 **`⌃⌥T`** 马上显示字幕条。
    - 第一次会询问 **“麦克风”** 和 **“语音识别”** 权限，都点“允许”。
@@ -173,7 +207,7 @@ Air 自己从 **Maono ProStudio 2x2 Lite**（和 OBS 同一个输入，互不影
 3. 想让本机识别成为默认来源：`config.json` 里 `caption` 的 `"source"` 改成 `"apple"`。
 
 **常见问题：**
-- 菜单里“本机识别”显示 ⚠️ 找不到 “Maono ProStudio 2x2 Lite”：会改用系统默认输入，日志里列出了现有的输入设备名字，把正确的名字填到 `config.json` 的 `caption.apple.inputDevice`。
+- 菜单里“本机识别”显示 ⚠️ 找不到 “Maono ProStudio 2x2 Lite”：会改用系统默认输入，日志里列出了现有的输入设备名字，把正确的名字填到 `config-local.json` 的 `caption.apple.inputDevice`（`config.json` 默认留空 = 系统默认输入）。
 - 讲台麦克风只接在第 1 路输入：`"channel": 1`（默认 0 = 两路混在一起）。
 - 显示“翻译语言还没下载”：做上面第 1 步，然后按两次 `⌃⌥S`（切走再切回）重新开始。
 - 识别准确度主要看音质：调音台给的干净讲台信号最好。人名、地名、专有名词认错或翻错：见下一小节“提高翻译质量”。
@@ -202,14 +236,14 @@ Air 自己从 **Maono ProStudio 2x2 Lite**（和 OBS 同一个输入，互不影
 - 要真正用上：Air 的 系统设置 › Apple Intelligence 与 Siri，打开 Apple Intelligence（M1 支持；第一次要下载模型）。
 - 菜单里会显示“翻译平均 x 秒/句”。如果 Air 和 OBS 一起跑变慢、发热，或者译文太慢，改成“快速”。
 
-**3. 术语表**（`glossary-priv.csv`、`glossary-bible.csv`、`glossary.csv`，在 Presenter 文件夹里）
+**3. 术语表**（`glossary-local.csv`、`glossary-bible.csv`、`glossary.csv`，在 Presenter 文件夹里）
 - 识别出来先**纠错**：第 3 列写了的错误写法会改成正确的字（投影上的原文也显示正确的字）。
 - 翻译前把中文术语**换成固定的英文译名**再翻译（英文讲员时反过来），译名就不会每次不一样。
 三个术语表，优先级从高到低：
-- `glossary-priv.csv`：教会自己的词（教会名字、牧者同工姓名、团契事工），**不放进仓库**，优先级最高。里面已经放了教会名字作例子，牧者同工的名字请按真实的改。
+- `glossary-local.csv`：教会自己的词（教会名字、牧者同工姓名、团契事工），**不放进仓库**，优先级最高。里面已经放了教会名字作例子，牧者同工的名字请按真实的改。
 - `glossary-bible.csv`：圣经 66 卷书名、常见人名、地名和教会用语（和合本 → NIV 译法），以后还会加入常见神学用语；升级时可以直接覆盖。
 - `glossary.csv`：一般用语（与圣经和本教会无关，例如本地地名），优先级最低；升级时可以直接覆盖。
-- 用 **TextEdit** 编辑（菜单 › 实时翻译 › 术语表和字幕记录 › 打开教会术语表，打开的是 `glossary-priv.csv`）。不要用 Numbers 打开再保存，会变成 `.numbers` 文件。也可以用 Excel 编辑后“另存为 CSV UTF-8”。
+- 用 **TextEdit** 编辑（菜单 › 实时翻译 › 术语表和字幕记录 › 打开教会术语表，打开的是 `glossary-local.csv`）。不要用 Numbers 打开再保存，会变成 `.numbers` 文件。也可以用 Excel 编辑后“另存为 CSV UTF-8”。
 - **保存后几秒内自动生效**，不用重开 Presenter（正在识别时，下一句开始用新的术语表）。
 
 每行一个词，用逗号分开：
@@ -231,7 +265,7 @@ Air 自己从 **Maono ProStudio 2x2 Lite**（和 OBS 同一个输入，互不影
 每周的讲道会有一些只用这一次的名字。Presenter 把下面这些当成“今日术语”：
 - **今天 PDF 里出现的术语**：Presenter 读出主日学和敬拜 PDF 里的文字，术语表里的词出现在 PDF 里，就算今日术语；PDF 里“讲员：王约翰牧师”这类行里的名字也算。全自动，不用做什么。
 - **今日术语文件**（可选）：在 Google Drive 放 Slides 的那个文件夹里建一个 **Google 表格**，标题 `terms-20261122`（当天日期），A 列中文、B 列英文、C 列常被识别成。Presenter 启动时和敬拜前会和 PDF 一起把它下载到“下载”文件夹（`terms-20261122.csv`）。
-  也可以用 Google 文档（每行 `以利沙, Elisha` 或 `以利沙 Elisha`），或者直接把 `terms-20261122.csv` / `.txt` 放进 Presenter 文件夹或“下载”文件夹。格式和 `glossary-priv.csv` 一样，而且优先于所有术语表。
+  也可以用 Google 文档（每行 `以利沙, Elisha` 或 `以利沙 Elisha`），或者直接把 `terms-20261122.csv` / `.txt` 放进 Presenter 文件夹或“下载”文件夹。格式和 `glossary-local.csv` 一样，而且优先于所有术语表。
 
 今日术语多了一种纠正：**读音相同就自动改**（不看声调，三个字以上的词）。例如今天讲以利沙，识别成“衣里沙”会自动改成“以利沙”。
 但像“哥哥他”（各各他）、“八十八”（拔示巴）、“一粒沙”（以利沙）这样本身就是普通词语的，**不会自动改**，只在字幕记录里记成“可能是…？”，留给你复查时决定。
@@ -256,8 +290,8 @@ Air 自己从 **Maono ProStudio 2x2 Lite**（和 OBS 同一个输入，互不影
 - Presenter 还在运行：菜单 › 实时翻译 › 术语表和字幕记录 › **复查最近的字幕记录**。
 - 已经退出（12:15 以后）：终端运行
   ```bash
-  open ~/Presenter/Presenter.app --args --review              # 最近一次的字幕记录
-  open ~/Presenter/Presenter.app --args --review 20261115     # 某一天的
+  ~/Presenter/presenter.sh review              # 最近一次的字幕记录
+  ~/Presenter/presenter.sh review 20261115     # 某一天的
   ```
   不会投影，只做复查。几十秒到一两分钟后，`transcripts/review-20261115.txt` 会自动用 TextEdit 打开，Presenter 随后自己退出。
 
@@ -270,14 +304,14 @@ Air 自己从 **Maono ProStudio 2x2 Lite**（和 OBS 同一个输入，互不影
          Today, Pastor Wang Yuehan preached
 ```
 对每一个判断：
-- 是人名/地名，译文不对（像拼音、或译错了）→ 在 `glossary-priv.csv` 加一行 `中文,正确的英文`。
+- 是人名/地名，译文不对（像拼音、或译错了）→ 在 `glossary-local.csv` 加一行 `中文,正确的英文`。
 - 原文的字也听错了（例子里“约汉”应该是“约翰”）→ 同时把错的写法放进第 3 列：`王约翰牧师,Pastor John Wang,王约汉牧师`。
 - 译文本来就对（例如 Toronto）→ 不用管；想固定下来也可以加一行。
 - 只在这一次讲道出现的（例如客座讲员的家乡）→ 不加也行，或者下次放进当天的今日术语。
 
 **第 3 步：看“二、自动纠正”**
 - **已改**：确认每一条都改对了。
-  - 改错了（例如讲的是沙子，“一粒沙”却被改成“以利沙”）→ `glossary-priv.csv` 加一行 `!一粒沙`，以后不再改。
+  - 改错了（例如讲的是沙子，“一粒沙”却被改成“以利沙”）→ `glossary-local.csv` 加一行 `!一粒沙`，以后不再改。
   - 某个第 3 列的写法本身是常用词、老是误改 → 把它从第 3 列删掉。
 - **可能听错**（读音相同但像普通词语，没有改）：
   - 确实是听错，而且这个错误写法平时不会出现 → 加到那个词的第 3 列，例如 `以利亚,Elijah,一里亚`。
@@ -286,7 +320,7 @@ Air 自己从 **Maono ProStudio 2x2 Lite**（和 OBS 同一个输入，互不影
 **第 4 步：顺便扫一眼字幕记录本身**（可选）
 用 TextEdit 打开 `transcripts/transcript-20261115.txt`，按 ⌘F 搜关键的人名、地名，或者快速看几段 `原`/`译`：
 
-| 字幕记录里看到 | 是什么问题 | `glossary-priv.csv` 里怎么写 |
+| 字幕记录里看到 | 是什么问题 | `glossary-local.csv` 里怎么写 |
 |---|---|---|
 | `原：……一里亚……`（应是以利亚） | 识别错（字错了） | `以利亚,Elijah,一里亚`（这个词已经有一行就在那行第 3 列加，多个用 `\|` 分开） |
 | `原` 是对的，`译` 里成了 Yi Liya | 翻译错 | `以利亚,Elijah` |
@@ -294,10 +328,10 @@ Air 自己从 **Maono ProStudio 2x2 Lite**（和 OBS 同一个输入，互不影
 | `改` 把对的字改错了 | 误改 | `!那几个字` |
 | 英文讲员：`原：……Oak Ville……` | 英文识别错 | `橡城,Oakville,,Oak Ville` |
 
-`glossary-bible.csv` / `glossary.csv` 里已有的词要加错误写法：在 `glossary-priv.csv` 里写一行同样的中文，**英文也要写上**，例如 `以利沙,Elisha,一粒沙`（`glossary-priv.csv` 优先）。
+`glossary-bible.csv` / `glossary.csv` 里已有的词要加错误写法：在 `glossary-local.csv` 里写一行同样的中文，**英文也要写上**，例如 `以利沙,Elisha,一粒沙`（`glossary-local.csv` 优先）。
 
 **第 5 步：保存，再复查一次**
-保存 `glossary-priv.csv` 后，重复第 1 步。报告的“三、用现在的术语表重新处理，结果有变化的句子”会列出每一句的 `旧改/新改`、`新送`、`旧译/新译`（用新的术语表重新翻译过）：
+保存 `glossary-local.csv` 后，重复第 1 步。报告的“三、用现在的术语表重新处理，结果有变化的句子”会列出每一句的 `旧改/新改`、`新送`、`旧译/新译`（用新的术语表重新翻译过）：
 - 新的都对 → 完成，下次自动用上。
 - 有新问题（例如某个词替换后译文反而别扭）→ 调整那一行，再复查。
 
@@ -319,7 +353,7 @@ Presenter 运行时会在本机提供一个字幕网页：**`http://127.0.0.1:87
    - “不可见时关闭源”“场景激活时刷新浏览器”都**不要勾**
 3. 到每一个直播用的场景里：来源 › **+** › **场景** › 选“字幕叠加”，拖到来源列表**最上面**。以后新建场景也记得加。
    （装了 Downstream Keyer 插件的话，也可以只在插件里加一次，所有场景都会有。）
-4. 试一下：`killall Presenter; open ~/Presenter/Presenter.app --args --test --apple --caption --pdftime 300`，在 OBS 预览里看字幕条出现、切换场景字幕还在。
+4. 试一下：`~/Presenter/presenter.sh test --apple --caption --pdftime 300`，在 OBS 预览里看字幕条出现、切换场景字幕还在。
    不开 OBS 也可以先看效果：菜单栏图标 › 实时翻译 › 在浏览器里预览 OBS 字幕页。
 
 **显示/隐藏：** 默认跟投影字幕条一起（10:40 自动出现，`⌃⌥T` 两边一起开关）。想让线上在字幕时段内一直有字幕（例如某几页 PDF 没留白，只在投影上按 `⌃⌥T` 隐藏）：菜单 › 实时翻译 › “OBS 字幕：字幕时段内一直显示”，或 `config.json` 的 `obs.visibility` 改成 `"auto"`。
@@ -341,20 +375,20 @@ Presenter 运行时会在本机提供一个字幕网页：**`http://127.0.0.1:87
 
 ## 六、每周日自动启动（crontab）
 
-建议改成 **9:05** 启动，给 Google Drive 下载多留几分钟：`bash autostart.sh on 09:05`
+建议改成 **9:05** 启动，给 Google Drive 下载多留几分钟：`./presenter.sh autostart on 09:05`
 
 
 在 Air 的终端运行：
 
 ```bash
 cd ~/Presenter
-bash autostart.sh on 14:05 daily   # ① 先测试：把时间设成几分钟后
+./presenter.sh autostart on 14:05 daily   # ① 先测试：把时间设成几分钟后
 # 到点后看 Presenter 是否自动打开（会弹状态提示；当天时间表已结束时，它会提示后自动退出——这就说明启动成功了）
-bash autostart.sh on               # ② 改回每周日 09:09
-bash autostart.sh status           # 查看当前设置
+./presenter.sh autostart on               # ② 改回每周日 09:09
+./presenter.sh autostart status           # 查看当前设置
 ```
 - 第一次设置 crontab 时，macOS 可能弹出“终端想要管理您的电脑”，点“好”。
-- 启动记录在 `~/Presenter/cron.log`。取消：`bash autostart.sh off`。
+- 启动记录在 `~/Presenter/cron.log`。取消：`./presenter.sh autostart off`。
 - cron 运行条件：**Mac 开机、已登录、没有锁屏、没有合盖睡眠**；错过时间不会补跑。建议：
   - 系统设置 › 锁定屏幕：屏幕保护程序/关闭显示器后“需要密码”设为较长时间或“永不”；
   - 或者让 Mac 每周日 9:05 自动唤醒：`sudo pmset repeat wakeorpoweron U 09:05:00`（取消：`sudo pmset repeat cancel`）。
@@ -363,9 +397,12 @@ bash autostart.sh status           # 查看当前设置
 ## 七、彩排
 
 ```bash
-killall Presenter; cd ~/Presenter && open Presenter.app --args --test
+~/Presenter/presenter.sh test              # 按今天的日期
+~/Presenter/presenter.sh test tomorrow     # 按明天的日期（周六晚上用）
+~/Presenter/presenter.sh test 20261122 --apple --pdftime 300   # 指定日期，后面的参数原样传给 Presenter
 ```
-**程序已在运行时，带参数的 open 不会生效**，所以先 `killall`。
+`presenter.sh` 会先退出正在运行的 Presenter 再启动（程序已在运行时，带参数的 open 不会生效）。
+其他操作：`start`（正式启动）、`stop`（退出）、`review`（复查字幕记录）、`log`（看实时日志）、`autostart`、`update`；不带参数运行 `./presenter.sh` 看说明。
 
 测试模式把整个时间表压缩成约 1 分钟：欢迎页 5 秒 → pdf1 15 秒 → 欢迎页 5 秒 → 时钟 6 秒 → 倒计时 10 秒 → pdf2 15 秒 → 自动退出。
 测试模式里，PDF 结束前 5 秒提醒，`⌃⌥E` 每次延长 10 秒。
@@ -376,14 +413,14 @@ killall Presenter; cd ~/Presenter && open Presenter.app --args --test
 - `--apple` / `--kaleo`：这次用本机识别 / Kaleo 作为字幕来源
 - `--input "MacBook"`：这次本机识别用哪个音频输入（名字包含即可；`--input ""` = 系统默认输入）。现有输入的名字在菜单栏图标 › 实时翻译 里能看到
 - `--channel 1`：只用第 1 路输入（0 = 混合）；`--lang en`：这次识别英语（`zh` = 普通话）
-- 例：用 MacBook 自带麦克风试本机识别 —— `open Presenter.app --args --test --apple --input "MacBook" --pdftime 300`，然后按 `⌃⌥T`
+- 例：用 MacBook 自带麦克风试本机识别 —— `./presenter.sh test --apple --input "MacBook" --pdftime 300`，然后按 `⌃⌥T`
 - `--countdown 90`：倒计时用 90 秒；`--pdftime 60`：每个 PDF 显示 60 秒（方便试翻页、试延长）
 - `--at 10:16:50`：按真实时间表运行，但假装现在是 10:16:50（试 10:17 的提醒和延长；`--at 10:39:30 --caption` 试 10:40 字幕条出现）
 - `--date 20261101`：按某天的日期找 PDF（也按这个日期从 Google Drive 下载，周六晚上试明天的文件很方便）
 - `--nogdrive`：这次不从 Google Drive 下载，只用“下载”里已有的文件
 - `--review`：不投影，只复查最近一次的字幕记录（`--review 20261115` 复查某一天），见第五节“从字幕记录整理术语表”
 
-例：试字幕条 2 分钟 —— `killall Presenter; open Presenter.app --args --test --caption --pdftime 120`
+例：试字幕条 2 分钟 —— `./presenter.sh test --caption --pdftime 120`
 
 想看实时日志：`./Presenter.app/Contents/MacOS/Presenter --test`（按 Ctrl+C 结束）。
 
@@ -422,11 +459,12 @@ macOS 15 起不允许只用 Option（⌥）或 Option+Shift 的全局快捷键�
 
 ## 九、修改内容
 
-- **Logo**：`images/LogoNew.png`（放在 `stage.html` 旁边也可以）；找不到就不显示。
-- **欢迎页文字、时钟页文字**：编辑 `stage.html` 的 `<body>` 部分；倒计时提示语和结束语在 `<script>` 开头的“文字设置”里。
-- **字号、颜色、留白**：`stage.html` 顶部 `:root` 里的变量（都有注释）。
-- **预览**：浏览器直接打开 `stage.html`；地址后加 `?mode=welcome`、`?mode=clock`、`?mode=countdown&s=90`、`?mode=final`。
-- **时间表、PDF 文件夹、文件名规则、延长、实时翻译**：`config.json`。时间表可以增减项目，`show` 可用 `welcome`、`clock`、`countdown`、`quit` 或 `pdfs` 里的名字。
+- **先复制一份**：`cp stage.html stage-local.html`，以后只改 `stage-local.html`（不放进仓库，升级不会被覆盖；有它时 Presenter 用它，没有才用通用的 `stage.html`）。
+- **Logo**：`images/LogoNew.png`（放在 `stage-local.html` 旁边也可以）；找不到就不显示。
+- **欢迎页文字、时钟页文字**：编辑 `stage-local.html` 的 `<body>` 部分；倒计时提示语和结束语在 `<script>` 开头的“文字设置”里。
+- **字号、颜色、留白**：`stage-local.html` 顶部 `:root` 里的变量（都有注释）。
+- **预览**：浏览器直接打开 `stage-local.html`；地址后加 `?mode=welcome`、`?mode=clock`、`?mode=countdown&s=90`、`?mode=final`。
+- **时间表、PDF 文件夹、文件名规则、延长、实时翻译**：`config.json` 里是默认值；要改的项写进 `config-local.json`（同名项覆盖 `config.json`）。时间表可以增减项目，`show` 可用 `welcome`、`clock`、`countdown`、`quit` 或 `pdfs` 里的名字。
 
 ## 十、容错
 
@@ -441,18 +479,21 @@ macOS 15 起不允许只用 Option（⌥）或 Option+Shift 的全局快捷键�
 | 文件 | 作用 |
 |---|---|
 | `presenter.swift` | 程序源代码 |
-| `build.sh` | 编译成 `Presenter.app`，并打包 `Presenter-ready.zip` |
+| `build.sh` | 编译成 `Presenter.app`，打包 `Presenter-ready.zip`；`--release` 发布到 release 分支 |
+| `presenter.sh` | 彩排、启动、退出、自动启动（crontab）、更新、复查字幕记录、看日志 |
 | `config.json` | 时间表、PDF 文件夹和文件名规则、延长、实时翻译、术语表设置、快捷键 |
-| `config-priv.json` | 私人设置：Google Drive 文件夹 ID、Kaleo 翻译网页等，覆盖 `config.json` 的同名项（不放进仓库，格式见 `config-priv.example.json`） |
-| `stage.html` | 欢迎页、时钟页、倒计时画面 |
+| `config-local.json` | 本机设置：Drive 文件夹 ID、服务账号密钥、Kaleo 网页、音频输入设备等，覆盖 `config.json` 的同名项（不放进仓库，格式见 `config-local.example.json`） |
+| `gdrive-sa.json` | Google 服务账号密钥（凭证；不放进仓库，也不打包） |
+| `stage.html` | 通用的欢迎页、时钟页、倒计时画面 |
+| `stage-local.html` | 本教会的画面（有它就不用 `stage.html`；不放进仓库） |
 | `images/` | 放 `LogoNew.png` |
 | `pdf/sample.pdf` | 仅测试模式使用 |
-| `autostart.sh` | 用 crontab 设置/取消自动启动 |
+| `autostart.sh` | 旧入口，等于 `presenter.sh autostart` |
 | `rclone` | 从 Google Drive 下载用的工具（自己放进来） |
 | `gdrive-state.json` | 记录上次从 Google Drive 下载的版本（运行后生成，删掉也没关系） |
 | `presenter.log`、`cron.log` | 运行日志、自动启动记录（运行后生成） |
 | `caption-dump-*` | “保存网页结构和截图”生成的文件（调整实时翻译用） |
-| `glossary-priv.csv` | 教会自己的术语表（教会名字、牧者同工、团契事工；优先级最高；不放进仓库，升级时不要覆盖） |
+| `glossary-local.csv` | 教会自己的术语表（教会名字、牧者同工、团契事工；优先级最高；不放进仓库，升级时不要覆盖） |
 | `glossary-bible.csv` | 圣经术语表：圣经书卷、人名、地名、教会用语、神学用语（升级时可以覆盖） |
 | `glossary.csv` | 一般术语表：与圣经和本教会无关的词，如本地地名（优先级最低；升级时可以覆盖） |
 | `terms-yyyymmdd.csv` | 当天的今日术语（可选；也可以放在“下载”里或 Google Drive） |
