@@ -1,0 +1,314 @@
+# Presenter 圣经术语表：圣经书卷、人名、地名、常用教会用语，以后也会加入常见神学用语（和合本 → NIV 通用译法）
+# 升级 Presenter 时这个文件可以直接覆盖。教会自己的词（牧者同工、团契等）请写在 glossary-local.csv 里。
+# 优先级：glossary-local.csv > glossary-bible.csv（本文件）> glossary.csv（一般用语）。
+# 格式和 glossary.csv 一样：中文,English,中文常被识别成,英文常被识别成,方向
+#   方向：空 = 双向；中→英 = 只在中文翻英文时替换（书卷名用这个，免得英文讲员说 Job、Acts、Numbers 时被换成书卷名）
+# 有意没有收录的词（容易出现在普通句子里或有歧义）：雅各（Jacob/James）、犹大、路加、路得、提多、多加、西拉、以利、利亚、西面
+中文,English,中文常被识别成,英文常被识别成,方向
+
+# ── 旧约书卷 ──
+创世记,Genesis,,,中→英
+出埃及记,Exodus,,,中→英
+利未记,Leviticus,,,中→英
+民数记,Numbers,,,中→英
+申命记,Deuteronomy,,,中→英
+约书亚记,Joshua,,,中→英
+士师记,Judges,,,中→英
+路得记,Ruth,,,中→英
+撒母耳记上,1 Samuel,,,中→英
+撒母耳记下,2 Samuel,,,中→英
+列王纪上,1 Kings,,,中→英
+列王纪下,2 Kings,,,中→英
+历代志上,1 Chronicles,,,中→英
+历代志下,2 Chronicles,,,中→英
+以斯拉记,Ezra,,,中→英
+尼希米记,Nehemiah,,,中→英
+以斯帖记,Esther,,,中→英
+约伯记,Job,,,中→英
+诗篇,Psalm,,,中→英
+箴言,Proverbs,,,中→英
+传道书,Ecclesiastes,,,中→英
+雅歌,Song of Songs,,,中→英
+以赛亚书,Isaiah,,,中→英
+耶利米书,Jeremiah,,,中→英
+耶利米哀歌,Lamentations,,,中→英
+以西结书,Ezekiel,,,中→英
+但以理书,Daniel,,,中→英
+何西阿书,Hosea,,,中→英
+约珥书,Joel,,,中→英
+阿摩司书,Amos,,,中→英
+俄巴底亚书,Obadiah,,,中→英
+约拿书,Jonah,,,中→英
+弥迦书,Micah,,,中→英
+那鸿书,Nahum,,,中→英
+哈巴谷书,Habakkuk,,,中→英
+西番雅书,Zephaniah,,,中→英
+哈该书,Haggai,,,中→英
+撒迦利亚书,Zechariah,,,中→英
+玛拉基书,Malachi,,,中→英
+
+# ── 新约书卷 ──
+马太福音,Matthew,,,中→英
+马可福音,Mark,,,中→英
+路加福音,Luke,,,中→英
+约翰福音,John,,,中→英
+使徒行传,Acts,,,中→英
+罗马书,Romans,,,中→英
+哥林多前书,1 Corinthians,,,中→英
+哥林多后书,2 Corinthians,,,中→英
+加拉太书,Galatians,,,中→英
+以弗所书,Ephesians,,,中→英
+腓立比书,Philippians,,,中→英
+歌罗西书,Colossians,,,中→英
+帖撒罗尼迦前书,1 Thessalonians,,,中→英
+帖撒罗尼迦后书,2 Thessalonians,,,中→英
+提摩太前书,1 Timothy,,,中→英
+提摩太后书,2 Timothy,,,中→英
+提多书,Titus,,,中→英
+腓利门书,Philemon,,,中→英
+希伯来书,Hebrews,,,中→英
+雅各书,James,,,中→英
+彼得前书,1 Peter,,,中→英
+彼得后书,2 Peter,,,中→英
+约翰一书,1 John,,,中→英
+约翰二书,2 John,,,中→英
+约翰三书,3 John,,,中→英
+犹大书,Jude,,,中→英
+启示录,Revelation,,,中→英
+
+# ── 旧约人名 ──
+亚当,Adam
+夏娃,Eve
+该隐,Cain
+亚伯,Abel
+塞特,Seth
+以诺,Enoch
+玛土撒拉,Methuselah
+挪亚,Noah
+亚伯兰,Abram
+亚伯拉罕,Abraham
+撒莱,Sarai
+撒拉,Sarah
+罗得,Lot,,,中→英
+夏甲,Hagar
+以实玛利,Ishmael
+以撒,Isaac
+利百加,Rebekah
+以扫,Esau
+拉结,Rachel
+拉班,Laban
+约瑟,Joseph
+便雅悯,Benjamin
+流便,Reuben
+法老,Pharaoh
+摩西,Moses
+亚伦,Aaron
+米利暗,Miriam
+约书亚,Joshua
+迦勒,Caleb
+喇合,Rahab
+基甸,Gideon
+参孙,Samson
+大利拉,Delilah
+拿俄米,Naomi
+波阿斯,Boaz
+哈拿,Hannah
+撒母耳,Samuel
+扫罗,Saul
+约拿单,Jonathan
+大卫,David
+歌利亚,Goliath
+拔示巴,Bathsheba
+拿单,Nathan
+押沙龙,Absalom
+所罗门,Solomon
+罗波安,Rehoboam
+耶罗波安,Jeroboam
+亚哈,Ahab
+耶洗别,Jezebel
+以利亚,Elijah
+以利沙,Elisha
+约西亚,Josiah
+希西家,Hezekiah
+乌西雅,Uzziah
+尼布甲尼撒,Nebuchadnezzar
+但以理,Daniel
+沙得拉,Shadrach
+米煞,Meshach
+亚伯尼歌,Abednego
+古列,Cyrus
+以斯拉,Ezra
+尼希米,Nehemiah
+以斯帖,Esther
+末底改,Mordecai
+哈曼,Haman
+约伯,Job
+以赛亚,Isaiah
+耶利米,Jeremiah
+以西结,Ezekiel
+何西阿,Hosea
+约拿,Jonah
+弥迦,Micah
+撒迦利亚,Zechariah
+玛拉基,Malachi
+麦基洗德,Melchizedek
+
+# ── 新约人名 ──
+耶稣基督,Jesus Christ
+主耶稣,Lord Jesus
+耶稣,Jesus
+基督,Christ
+马利亚,Mary
+抹大拉的马利亚,Mary Magdalene
+施洗约翰,John the Baptist
+约翰,John
+西门彼得,Simon Peter
+彼得,Peter
+安得烈,Andrew
+腓力,Philip
+巴多罗买,Bartholomew
+多马,Thomas
+马太,Matthew
+达太,Thaddaeus
+加略人犹大,Judas Iscariot
+马大,Martha
+拉撒路,Lazarus
+尼哥底母,Nicodemus
+撒该,Zacchaeus
+希律,Herod
+彼拉多,Pilate
+该亚法,Caiaphas
+巴拉巴,Barabbas
+伊利莎白,Elizabeth,,,中→英
+司提反,Stephen
+腓利,Philip
+保罗,Paul
+巴拿巴,Barnabas
+提摩太,Timothy
+马可,Mark
+亚居拉,Aquila
+百基拉,Priscilla
+亚波罗,Apollos
+腓利门,Philemon
+阿尼西母,Onesimus
+吕底亚,Lydia
+哥尼流,Cornelius
+亚拿尼亚,Ananias
+撒非喇,Sapphira
+大比大,Tabitha
+加百列,Gabriel
+米迦勒,Michael,,,中→英
+撒但,Satan
+别西卜,Beelzebul
+
+# ── 地名 ──
+伊甸园,Garden of Eden
+伊甸,Eden
+巴别塔,Tower of Babel
+吾珥,Ur
+哈兰,Haran
+迦南,Canaan
+埃及,Egypt
+歌珊,Goshen
+西奈山,Mount Sinai
+西奈,Sinai
+何烈山,Mount Horeb
+约旦河,Jordan River
+耶利哥,Jericho
+伯特利,Bethel
+示罗,Shiloh
+耶路撒冷,Jerusalem
+锡安山,Mount Zion
+锡安,Zion
+伯利恒,Bethlehem
+希伯仑,Hebron
+别是巴,Beersheba
+撒玛利亚,Samaria
+加利利海,Sea of Galilee
+加利利,Galilee
+拿撒勒,Nazareth
+迦百农,Capernaum
+迦拿,Cana
+伯大尼,Bethany
+伯赛大,Bethsaida
+客西马尼,Gethsemane
+各各他,Golgotha
+橄榄山,Mount of Olives
+以马忤斯,Emmaus
+巴比伦,Babylon
+尼尼微,Nineveh
+亚述,Assyria
+波斯,Persia
+所多玛,Sodom
+蛾摩拉,Gomorrah
+推罗,Tyre
+西顿,Sidon
+大马色,Damascus
+大马士革,Damascus
+安提阿,Antioch
+以弗所,Ephesus
+哥林多,Corinth
+腓立比,Philippi
+帖撒罗尼迦,Thessalonica
+加拉太,Galatia
+歌罗西,Colossae
+雅典,Athens
+拔摩岛,Patmos
+拔摩,Patmos
+犹太地,Judea
+以色列,Israel
+非利士人,Philistines
+摩押,Moab
+以东,Edom
+亚扪,Ammon
+迦勒底,Chaldea
+
+# ── 教会用语 ──
+三位一体,Trinity
+圣灵,Holy Spirit
+弥赛亚,Messiah
+以马内利,Immanuel
+哈利路亚,Hallelujah
+和散那,Hosanna
+阿们,Amen
+耶和华,the LORD,,,中→英
+上帝,God,,,中→英
+天父,Heavenly Father
+安息日,Sabbath
+逾越节,Passover
+五旬节,Pentecost
+住棚节,Feast of Tabernacles
+赎罪日,Day of Atonement
+复活节,Easter
+受难节,Good Friday
+棕枝主日,Palm Sunday
+圣诞节,Christmas
+将临期,Advent
+大斋期,Lent
+大使命,Great Commission
+大诫命,Great Commandment
+登山宝训,Sermon on the Mount
+八福,Beatitudes
+主祷文,Lord's Prayer
+十诫,Ten Commandments
+摩西五经,Pentateuch
+旧约,Old Testament
+新约,New Testament
+法利赛人,Pharisees
+撒都该人,Sadducees
+外邦人,Gentiles
+大祭司,high priest
+祭司长,chief priests
+会幕,tabernacle
+约柜,Ark of the Covenant
+挪亚方舟,Noah's ark
+吗哪,manna
+圣餐,Holy Communion
+主日学,Sunday School
+团契,fellowship,,,中→英
+查经,Bible study
+祷告会,prayer meeting
+弟兄姊妹,brothers and sisters
+神的国,kingdom of God
+天国,kingdom of heaven
+道成肉身,incarnation

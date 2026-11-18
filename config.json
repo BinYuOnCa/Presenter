@@ -1,0 +1,133 @@
+{
+  "_说明": "改完保存后，退出并重新打开 Presenter 才生效。时间为 24 小时制 HH:MM:SS。",
+  "_local说明": "这里是通用的默认设置，升级时会被新版本替换，请不要直接改。这台电脑/本教会自己的设置（Google Drive 文件夹 ID、服务账号密钥、Kaleo 翻译网页、音频输入设备等）写在同一文件夹的 config-local.json 里（不放进仓库，格式见 config-local.example.json）。config-local.json 里写了的项覆盖这里的同名项，只写要改的那几项即可，任何设置都可以这样覆盖。",
+
+  "_schedule说明": "show 可选：welcome（欢迎页）、clock（时钟）、countdown（倒计时，到下一项开始为止）、quit（退出程序），或下面 pdfs 里的名字。时间必须从早到晚排列。",
+  "schedule": [
+    { "at": "09:10:00", "show": "welcome" },
+    { "at": "09:12:00", "show": "pdf1" },
+    { "at": "10:18:00", "show": "welcome" },
+    { "at": "10:21:00", "show": "clock" },
+    { "at": "10:28:30", "show": "countdown" },
+    { "at": "10:30:00", "show": "pdf2" },
+    { "at": "12:15:00", "show": "quit" }
+  ],
+
+  "_pdfs说明": "PDF 文件名规则（正则表达式），{date} 会换成当天日期（格式见 dateFormat，yyyyMMdd = 20261025）。JSON 里的反斜杠要写两个。有多个文件符合时用最新的那个。",
+  "pdfFolder": "~/Downloads",
+  "dateFormat": "yyyyMMdd",
+  "pdfs": {
+    "pdf1": "^[A-Z][a-z]+-{date}\\.pdf$",
+    "pdf2": "^{date}\\.pdf$"
+  },
+  "_pdfNames说明": "菜单和提示里显示的名字（时间表和其他设置里仍然写 pdf1、pdf2）",
+  "pdfNames": {
+    "pdf1": "主日学",
+    "pdf2": "敬拜"
+  },
+
+  "_gdrive说明": "启动时（以及每个 PDF 开始前 recheckBeforeMinutes 分钟）用 rclone 从 Google Drive 文件夹把今天的 Google Slides 导出成 PDF，存到上面的 pdfFolder（下载文件夹）。文件名规则同 pdfs。folderId（写在 config-local.json 里）：文件夹网址里 folders/ 后面那一串。serviceAccountFile（写在 config-local.json 里）：Google 服务账号的 JSON 密钥文件（相对于 Presenter 文件夹），填了就直接用它连接，不需要 rclone config；不填时用 remote：rclone config 时起的名字。rclone：留空 = 自动找（Presenter 文件夹里的 rclone 优先）。waitSeconds：PDF 到点时还在下载，最多等几秒。",
+  "gdrive": {
+    "enabled": true,
+    "remote": "gdrive",
+    "rclone": "",
+    "recheckBeforeMinutes": 4,
+    "waitSeconds": 60
+  },
+
+  "_extend说明": "PDF 结束前 warnSeconds 秒，内建屏上方弹出橙色提醒；这时（或任何时候）按 extend 快捷键（默认 ⌃⌥E），当前画面延长 minutes 分钟，可以连按。不操作就按时间表切换。warnFor：哪些 PDF 结束前提醒，[] 表示都不提醒。",
+  "extend": {
+    "minutes": 2,
+    "warnSeconds": 60,
+    "warnFor": ["pdf1", "pdf2"]
+  },
+
+  "_caption说明": "实时翻译字幕条。url：Kaleo 翻译网页（写在 config-local.json 里）。when：firstSunday（每月第一个星期天）、sunday（每个星期天）、always（每天）、never（只手动打开）。showDuring：哪些画面时显示；from/to：几点开始/停止自动显示（to 留空 = 到画面结束）。随时可按 ⌃⌥T 手动显示/隐藏。heightPercent：占投影高度的百分比。lines：显示几行。marginPercent：字幕左右各留白多少（占屏幕宽度的百分比）。字幕从左到右写，一行写满整行向上滚动。overlay：true = 叠加在 PDF 下部（PDF 保持全屏，做 PDF 时把这些页的下方 1/5 留白），false = PDF 缩到上方 4/5。background：颜色，或 transparent（透明，字直接显示在 PDF 留白处，带黑色描边）。mode：text（提取文字显示大字）或 page（直接显示原网页）。textSelector：一般留空（自动寻找），找得不准时填 CSS 选择器。",
+  "_caption来源说明": "source：字幕来源，kaleo（Kaleo 网页）或 apple（本机识别 + 翻译），使用时可随时用 ⌃⌥S 或菜单切换。apple 里：language 识别语言 zh-CN（普通话）或 en-US（英语），用 ⌃⌥L 切换；translateTo：auto = 翻成另一种语言，none = 不翻译；inputDevice：音频输入设备名字（包含即可，留空 = 系统默认输入）；channel：0 = 混合所有输入，1 / 2 = 只用第 1 / 2 路输入；display：both（上面一行原文、下面译文）、translation（只显示译文）、original（只显示原文）；clearAfterSeconds：多少秒没人说话就清空字幕。",
+  "_caption补标点说明": "autoPunctuation：按讲员的停顿自动补标点，zh = 只对普通话（默认），all = 普通话和英语，off = 不补；pauseComma：停顿几秒补逗号；pausePeriod：停顿几秒补句号。讲得快、标点太少就把两个数调小一点（例如 0.25 / 0.6），标点太多就调大。",
+  "_caption翻译质量说明": "sentenceMode：true = 整句翻译（一句说完再翻，更准，译文晚一两秒；⌃⌥J 随时切换）；sentenceMaxSeconds：整句翻译最多等几秒；sentencePauseSeconds：停顿几秒算一句说完；translationQuality：high = 高保真（macOS 26.4 起，Apple Intelligence 打开时用它的模型，否则自动用普通模型），fast = 普通模型；saveTranscript：把识别和翻译存到 Presenter 文件夹的 transcripts/transcript-yyyymmdd.txt（复查、补充术语表用）。",
+  "caption": {
+    "source": "kaleo",
+    "apple": {
+      "language": "zh-CN",
+      "translateTo": "auto",
+      "inputDevice": "",
+      "channel": 0,
+      "display": "both",
+      "clearAfterSeconds": 15,
+      "sentenceMode": true,
+      "sentenceMaxSeconds": 7,
+      "sentencePauseSeconds": 1.2,
+      "translationQuality": "high",
+      "saveTranscript": true,
+      "autoPunctuation": "zh",
+      "pauseComma": 0.3,
+      "pausePeriod": 0.8
+    },
+    "when": "firstSunday",
+    "showDuring": ["pdf2"],
+    "from": "10:40:00",
+    "to": "",
+    "heightPercent": 20,
+    "lines": 3,
+    "mode": "text",
+    "textSelector": "",
+    "color": "#ffffff",
+    "background": "#000000",
+    "overlay": true,
+    "pageZoom": 1.5,
+    "reloadIfStaleMinutes": 10,
+    "marginPercent": 10
+  },
+
+  "_obs说明": "OBS 字幕叠加：Presenter 在本机提供字幕网页 http://127.0.0.1:端口/caption，在 OBS 里加一个“浏览器”来源（宽 1920、高 1080）放到所有场景最上层，线上就能看到字幕。visibility：same = 跟投影字幕条一起显示/隐藏（⌃⌥T 同时控制两边），auto = 字幕时段内一直显示（投影上按 ⌃⌥T 隐藏时线上照样有）。lines：几行；heightPercent：字幕条占视频高度的百分比；bottomPercent：离视频底边多远；marginPercent：左右各留白；background：字幕条背景（rgba 最后一个数是不透明度）；color：字的颜色。",
+  "obs": {
+    "enabled": true,
+    "port": 8765,
+    "visibility": "same",
+    "lines": 3,
+    "heightPercent": 15,
+    "bottomPercent": 4,
+    "marginPercent": 10,
+    "background": "rgba(0,0,0,0.55)",
+    "color": "#ffffff"
+  },
+
+  "_glossary说明": "术语表（只对本机识别有效）。files：术语表文件（在 Presenter 文件夹里，前面的优先）：glossary-local.csv 是教会自己的（牧者同工、团契等，不放进仓库），glossary-bible.csv 是圣经书卷/人名/地名/神学用语，glossary.csv 是一般用语（与圣经和本教会无关）；没有的文件会跳过。beforeTranslation：翻译前把术语换成固定的译名。fuzzy：读音相同的自动纠正，today = 只对今日术语，all = 对所有术语（容易改错，不建议），off = 不做。fuzzyMinLength：几个字以上的词才做读音纠正。pdfTerms：今天 PDF 里出现的术语和“讲员：xxx”这类名字算今日术语。termsFile：今日术语文件的名字规则（放在 Presenter 文件夹或下载文件夹）。fromGoogleDrive：也从 Google Drive 文件夹下载 terms-yyyymmdd（Google 表格 / Google 文档 / csv / txt）。改术语表文件后不用重开 Presenter，几秒内自动生效。",
+  "glossary": {
+    "enabled": true,
+    "files": ["glossary-local.csv", "glossary-bible.csv", "glossary.csv"],
+    "beforeTranslation": true,
+    "fuzzy": "today",
+    "fuzzyMinLength": 3,
+    "pdfTerms": true,
+    "termsFile": "^terms-{date}\\.(csv|txt)$",
+    "fromGoogleDrive": true
+  },
+
+  "_screen说明": "一般留空（自动选外接屏）。接了多块外接屏时，填投影屏名字里的几个字。",
+  "screenName": "",
+
+  "hotkeys": {
+    "_说明": "写法：ctrl/alt/shift/cmd + 键名。键名：a-z 0-9 left right up down space escape pageup pagedown home end f1-f20。一个动作可写多个，[] 表示不用。用翻页笔：在 next 里加 \"pagedown\"、prev 里加 \"pageup\"。",
+    "next":         ["ctrl+alt+right", "ctrl+alt+down"],
+    "prev":         ["ctrl+alt+left", "ctrl+alt+up"],
+    "first":        ["ctrl+alt+1"],
+    "last":         [],
+    "black":        ["ctrl+alt+b"],
+    "extend":       ["ctrl+alt+e"],
+    "auto":         ["ctrl+alt+r"],
+    "caption":      ["ctrl+alt+t"],
+    "captionSource": ["ctrl+alt+s"],
+    "captionLanguage": ["ctrl+alt+l"],
+    "showOriginal": ["ctrl+alt+o"],
+    "showTranslation": ["ctrl+alt+y"],
+    "showBoth":     ["ctrl+alt+a"],
+    "sentenceMode": ["ctrl+alt+j"],
+    "pdfNow":       ["ctrl+alt+p"],
+    "welcomeNow":   [],
+    "clockNow":     [],
+    "countdownNow": [],
+    "quit":         ["ctrl+alt+escape"]
+  }
+}

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key><string>local.presenter</string>
+  <key>CFBundleName</key><string>Presenter</string>
+  <key>CFBundleDisplayName</key><string>Presenter</string>
+  <key>CFBundleExecutable</key><string>Presenter</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>2.5</string>
+  <key>CFBundleVersion</key><string>7</string>
+  <key>LSMinimumSystemVersion</key><string>11.0</string>
+  <key>LSUIElement</key><true/>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>NSDownloadsFolderUsageDescription</key><string>Presenter 需要读取“下载”文件夹里当天的 PDF。</string>
+  <key>NSMicrophoneUsageDescription</key><string>Presenter 需要听音频输入，把讲话实时转成字幕。</string>
+  <key>NSSpeechRecognitionUsageDescription</key><string>Presenter 在本机把讲话转成文字，显示成字幕。</string>
+</dict>
+</plist>

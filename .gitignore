@@ -1,0 +1,19 @@
+# 这台电脑自己的文件：presenter.sh update 不会动它们
+*-local.*
+!*-local.example.*
+images/LogoNew.png
+rclone
+bin/
+gdrive-sa.json
+*-sa.json
+*.key.json
+presenter.log
+cron.log
+gdrive-state.json
+transcripts/
+caption-dump-*
+terms-*.csv
+terms-*.txt
+config.old.json
+*.bak
+.DS_Store

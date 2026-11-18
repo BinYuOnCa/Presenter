@@ -1,0 +1,15 @@
+{
+  "_说明": "复制成 config-local.json 再填（config-local.json 不放进仓库）。这里写了的项覆盖 config.json 的同名项，只写要改的即可，不需要的项可以删掉。",
+  "_gdrive说明": "folderId：Google Drive 文件夹网址里 folders/ 后面那一串。serviceAccountFile：Google 服务账号的 JSON 密钥文件（放在 Presenter 文件夹里，例如 gdrive-sa.json），并把上面的文件夹共享给服务账号的邮箱（查看者）；用了服务账号就不需要 rclone config。不用服务账号时删掉这一项，改填 remote（rclone config 时起的名字）。",
+  "gdrive": {
+    "folderId": "",
+    "serviceAccountFile": "gdrive-sa.json"
+  },
+  "_caption说明": "url：Kaleo 翻译网页。inputDevice：音频输入设备名字（包含即可）；不写 = 系统默认输入。",
+  "caption": {
+    "url": "https://app.withkaleo.com/c/your-church",
+    "apple": {
+      "inputDevice": "Maono ProStudio 2x2 Lite"
+    }
+  }
+}

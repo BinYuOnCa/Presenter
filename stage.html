@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Presenter Stage</title>
+<!--
+  投影舞台页（通用的默认版本，升级时会被替换）。Presenter 用它显示三种画面（切换时间在 config.json 里）：
+  要改成本教会的文字、颜色：把本文件复制成 stage-local.html 再改。stage-local.html 不放进仓库、升级时不会被替换，有它时 Presenter 优先用它。
+    welcome   欢迎页：居中显示 Logo 和中英文欢迎语
+    clock     时钟页：四角显示提示文字，中间显示日期和时间（带秒）
+    countdown 倒计时：时钟页其他内容不变，中间变成“离崇拜开始还有：”+ MM:SS；到 0 显示“敬拜马上开始!”
+  两个页面四周都留白 10%。
+  Logo：images/LogoNew.png（或与本文件同一文件夹的 LogoNew.png）。
+  预览：浏览器直接打开本文件，地址后加 ?mode=welcome、?mode=countdown&s=90 或 ?mode=final
+-->
+<style>
+:root{
+    --page-bg:#ffffff;   /* 底色 */
+    --ink:blue;          /* 文字颜色 */
+    --margin:10%;        /* 四周留白 */
+
+    /* 时钟页字号：时间、倒计时保持原大小，其余文字已调小 */
+    --top-size:3.8vw;           /* 右上两行（原 7vw） */
+    --bottom-left-size:3vw;     /* 左下两行（原 4.5vw） */
+    --bottom-right-size:2vw;    /* 右下两行（原 3vw） */
+    --date-size:3.5vw;          /* 日期 / “离崇拜开始还有：”（原 5vw） */
+    --time-size:6vw;            /* 时间（不变） */
+    --countdown-size:7vw;       /* 倒计时 / 结束语（不变） */
+
+    /* 欢迎页 */
+    --welcome-logo-height:40vh;
+    --welcome-zh-size:4.6vw;
+    --welcome-en-size:2.6vw;
+}
+
+html, body{
+    margin:0;
+    background:var(--page-bg);
+}
+body{
+    font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue","PingFang SC",Arial,sans-serif;
+    color:var(--ink);
+    position:relative;
+    width:100vw;
+    height:100vh;
+    overflow:hidden;
+    cursor:none;
+}
+
+/* 四周留白 10% 的内容区，下面的位置和百分比都相对于它 */
+.page{
+    position:absolute;
+    top:var(--margin);
+    right:var(--margin);
+    bottom:var(--margin);
+    left:var(--margin);
+}
+body[data-mode="welcome"] #clockPage{ display:none; }
+body:not([data-mode="welcome"]) #welcomePage{ display:none; }
+
+/* ================= 欢迎页 ================= */
+#welcomePage{
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    text-align:center;
+}
+#welcomeLogo{
+    max-height:var(--welcome-logo-height);
+    max-width:100%;
+    object-fit:contain;
+    margin-bottom:5vh;
+}
+#welcomeZh{
+    font-size:var(--welcome-zh-size);
+    font-weight:bold;
+    letter-spacing:0.05em;
+}
+#welcomeEn{
+    font-size:var(--welcome-en-size);
+    font-weight:600;
+    margin-top:2.5vh;
+}
+
+/* ================= 时钟页 ================= */
+
+/* 左上角 Logo */
+#logo{
+    position:absolute;
+    top:0;
+    left:0;
+    width:25%;  /* 1/4 宽 */
+    height:50%; /* 1/2 高 */
+    object-fit:contain;
+    object-position:left top;
+}
+
+/* 右上角两行 */
+#topRightText{
+    position:absolute;
+    top:0;
+    right:0;
+    width:66.666%;  /* 2/3 宽 */
+    height:25%;     /* 1/4 高 */
+    text-align:left;
+    display:flex;
+    flex-direction:column;
+    justify-content:center;
+    padding-left:1vw;
+    box-sizing:border-box;
+}
+#topRightText div{
+    font-size:var(--top-size);
+    font-weight:bold;
+    line-height:1.2;
+}
+
+/* 左下角两行 */
+#bottomLeftText{
+    position:absolute;
+    bottom:0;
+    left:0;
+    width:67%;      /* 2/3 宽 */
+    height:25%;     /* 1/4 高 */
+    display:flex;
+    flex-direction:column;
+    justify-content:center;
+    padding-left:1vw;
+    box-sizing:border-box;
+}
+#bottomLeftText div{
+    font-size:var(--bottom-left-size);
+    font-weight:bold;
+}
+
+/* 右下角两行 */
+#bottomRightText{
+    position:absolute;
+    bottom:0;
+    right:0;
+    width:36%;  /* 1/3 宽 */
+    height:20%; /* 1/6 高 */
+    display:flex;
+    flex-direction:column;
+    justify-content:center;
+    text-align:center;
+}
+#bottomRightText div{
+    font-size:var(--bottom-right-size);
+    font-weight:bold;
+}
+
+/* 中间动态内容 */
+#centerContainer{
+    position:absolute;
+    top:45%;
+    left:55%;
+    transform:translate(-50%, -50%);
+    text-align:center;
+    white-space:nowrap;
+}
+#date{
+    font-size:var(--date-size);
+    opacity:.95;
+}
+#time{
+    font-size:var(--time-size);
+    font-weight:600;
+    font-variant-numeric:tabular-nums;
+}
+#countdown{
+    font-size:var(--countdown-size);
+    font-weight:670;
+    font-variant-numeric:tabular-nums;
+}
+</style>
+</head>
+
+<body data-mode="welcome">
+
+<!-- ================= 欢迎页 ================= -->
+<div id="welcomePage" class="page">
+    <img id="welcomeLogo" class="logoImg" alt="">
+    <div id="welcomeZh">欢迎参加主日崇拜</div>
+    <div id="welcomeEn">Welcome to Sunday Worship</div>
+</div>
+
+<!-- ================= 时钟页 ================= -->
+<div id="clockPage" class="page">
+    <img id="logo" class="logoImg" alt="">
+
+    <div id="topRightText">
+        <div id="topLine1">请安静...</div>
+        <div id="topLine2">以心灵诚实敬拜神</div>
+    </div>
+
+    <div id="bottomLeftText">
+        <div id="bottomLine1">请勿吃零食或饮料（饮水除外）</div>
+        <div id="bottomLine2">请保持安静，并关闭手机</div>
+    </div>
+
+    <div id="bottomRightText">
+        <div id="bottomRightLine1">（教会名称）</div>
+        <div id="bottomRightLine2">（教会网址）</div>
+    </div>
+
+    <div id="centerContainer">
+        <div id="date"></div>
+        <div id="time"></div>
+        <div id="countdown"></div>
+    </div>
+</div>
+
+<script>
+(function () {
+    // -------- 文字设置 --------
+    var COUNTDOWN_LABEL = "离崇拜开始还有：";   // 倒计时阶段，日期行显示的文字
+    var FINAL_TEXT = "敬拜马上开始!";          // 倒计时结束后显示的固定内容
+    // --------------------------
+
+    // Logo：先找 images/LogoNew.png，再找同一文件夹的 LogoNew.png，都没有就不显示
+    var logos = document.querySelectorAll(".logoImg");
+    for (var i = 0; i < logos.length; i++) {
+        (function (img) {
+            img.onerror = function () {
+                if (!img.getAttribute("data-retry")) {
+                    img.setAttribute("data-retry", "1");
+                    img.src = "LogoNew.png";
+                } else {
+                    img.style.display = "none";
+                }
+            };
+            img.src = "images/LogoNew.png";
+        })(logos[i]);
+    }
+
+    var dateEl = document.getElementById("date");
+    var timeEl = document.getElementById("time");
+    var countdownEl = document.getElementById("countdown");
+
+    var mode = "welcome", target = 0, offset = 0;
+
+    function p2(n) { return (n < 10 ? "0" : "") + n; }
+    function setText(el, text) { if (el.textContent !== text) el.textContent = text; }
+    function setShown(el, shown) {
+        var v = shown ? "block" : "none";
+        if (el.style.display !== v) el.style.display = v;
+    }
+
+    function render() {
+        if (mode === "welcome") return;
+        var now = new Date(Date.now() + offset);
+        if (mode === "countdown") {
+            var left = Math.ceil((target - now.getTime()) / 1000);
+            if (left > 0) {
+                setShown(dateEl, true); setShown(timeEl, false); setShown(countdownEl, true);
+                setText(dateEl, COUNTDOWN_LABEL);
+                setText(countdownEl, p2(Math.floor(left / 60)) + ":" + p2(left % 60));
+            } else {
+                setShown(dateEl, false); setShown(timeEl, false); setShown(countdownEl, true);
+                setText(countdownEl, FINAL_TEXT);
+            }
+        } else {
+            setShown(dateEl, true); setShown(timeEl, true); setShown(countdownEl, false);
+            setText(dateEl, now.getFullYear() + "年" + (now.getMonth() + 1) + "月" + now.getDate() + "日");
+            setText(timeEl, p2(now.getHours()) + ":" + p2(now.getMinutes()) + ":" + p2(now.getSeconds()));
+        }
+    }
+
+    // Presenter 调用：setMode('welcome' | 'clock' | 'countdown', 倒计时结束时刻(毫秒), 模拟时间偏移(毫秒))
+    window.setMode = function (m, t, off) {
+        mode = (m === "welcome" || m === "countdown") ? m : "clock";
+        target = Number(t) || 0;
+        offset = Number(off) || 0;
+        document.body.setAttribute("data-mode", mode);
+        render();
+    };
+
+    // 浏览器单独打开时的预览
+    var q = new URLSearchParams(location.search);
+    var pm = q.get("mode");
+    if (pm === "countdown") {
+        window.setMode("countdown", Date.now() + (Number(q.get("s")) || 90) * 1000, 0);
+    } else if (pm === "final") {
+        window.setMode("countdown", Date.now() - 1000, 0);
+    } else if (pm === "clock") {
+        window.setMode("clock", 0, 0);
+    } else {
+        window.setMode("welcome", 0, 0);
+    }
+    setInterval(render, 50);
+})();
+</script>
+
+</body>
+</html>
