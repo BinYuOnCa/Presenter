@@ -2,11 +2,12 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>OCHC Worship</title>
+<title>Presenter Stage</title>
 <!--
-  投影舞台页。Presenter 用它显示三种画面（切换时间在 config.json 里）：
+  投影舞台页（通用的默认版本，升级时会被替换）。Presenter 用它显示三种画面（切换时间在 config.json 里）：
+  要改成本教会的文字、颜色：把本文件复制成 stage-local.html 再改。stage-local.html 不放进仓库、升级时不会被替换，有它时 Presenter 优先用它。
     welcome   欢迎页：居中显示 Logo 和中英文欢迎语
-    clock     时钟页：版式同 OCHC_Worship_init.html，中间显示日期和时间（带秒）
+    clock     时钟页：四角显示提示文字，中间显示日期和时间（带秒）
     countdown 倒计时：时钟页其他内容不变，中间变成“离崇拜开始还有：”+ MM:SS；到 0 显示“敬拜马上开始!”
   两个页面四周都留白 10%。
   Logo：images/LogoNew.png（或与本文件同一文件夹的 LogoNew.png）。
@@ -181,8 +182,8 @@ body:not([data-mode="welcome"]) #welcomePage{ display:none; }
 <!-- ================= 欢迎页 ================= -->
 <div id="welcomePage" class="page">
     <img id="welcomeLogo" class="logoImg" alt="">
-    <div id="welcomeZh">欢迎来到橡城华人希望教会</div>
-    <div id="welcomeEn">Welcome to Oakville Chinese Hope Church</div>
+    <div id="welcomeZh">欢迎参加主日崇拜</div>
+    <div id="welcomeEn">Welcome to Sunday Worship</div>
 </div>
 
 <!-- ================= 时钟页 ================= -->
@@ -200,8 +201,8 @@ body:not([data-mode="welcome"]) #welcomePage{ display:none; }
     </div>
 
     <div id="bottomRightText">
-        <div id="bottomRightLine1">橡城华人希望教会</div>
-        <div id="bottomRightLine2">www.ochopechurch.org</div>
+        <div id="bottomRightLine1">（教会名称）</div>
+        <div id="bottomRightLine2">（教会网址）</div>
     </div>
 
     <div id="centerContainer">
