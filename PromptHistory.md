@@ -83,6 +83,25 @@ sed -i '' 's/-weak_framework Translation/-framework Translation/' build.sh
 修改代码，从configjson中将 private的内容分离出来，生成priv.json，加入.gitignore 以避免加入Repo；
 
 
+❯ 将config.json中敏感信息单列出来放另一个json文件，并且将这个文件放入.gitignore中。同时，再生成一个glossary-priv.csv作为自定义的术语表，不存入repo. 这三个术语表分工如下，优先级从低到高：
+  - glossary.csv  一般性的术语表，与圣经及本教会无关
+  - glossary-bible.csv ， 圣经相关的术语表，除现有的内容外，以后还可能加入一些常见神学术语等
+  - glossary-priv.csv  与教会相关的术语，包括教牧同工姓名，各团契名，等
+
+ 关于rclone的设置是否也可以放到config-priv.json，并且在程序中自动配置rclone？
+ 
+  可否让build.sh生成的文件，直接放入repo的某个特定branch，这样，在Air上或其他机器上（相同配置不同机器，比如新换一台Mac Air作直播时）直接Clone后就使用？以后每次升级，也只需这边Build+push，那边Fetch就可以工作了。
+
+
+
+❯ 仓库公开，对教会名称在仓库中并不介意，但从规范Best Practice角度，单独设定一个stage-priv.html中stage-local.html文件更Decent一些。
+  config.json中对音频源用系统默认，允许在config-priv.json中高定同名配置覆盖。
+  config-priv.json 和 config-local.jsaon哪个名字更好？
+  crontab 和 彩排 均提供相应的shell Script,或不现一个script带不同的运行参数实现
+  releaes仓库可否删除历史，比如10次以前的版本就删除，这样仓库增加到包含最近10次Relase后就不会因Relase再增大了。如实在需要以前的Relase，可以通过切换到以前的版本重新Build得到。
+  对rclone先方案B :  A  + 自动配置，用服务帐号
+  build.sh 打包时不带凭证，手工到Air（或以后新的Air电脑，或其他教会想用同样的Presenter的自己的电脑）上配置。
+
 
 
 
