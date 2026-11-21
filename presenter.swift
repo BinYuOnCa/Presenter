@@ -207,7 +207,7 @@ struct AppleCaptionConfig {
     var sentenceMaxSeconds: Double = 7  // 整句翻译最多等几秒
     var sentencePauseSeconds: Double = 1.2   // 停顿几秒算一句说完
     var translationQuality = "high"     // high（高保真，Apple Intelligence 可用时）| fast
-    var saveTranscript = true           // 把识别和翻译存到 transcripts/transcript-yyyymmdd.txt
+    var saveTranscript = true           // 把识别和翻译存到 transcripts/（文件名见 transcripts 设置）
     var autoPunctuation = "zh"          // 按停顿补标点：zh（只对普通话）| all | off
     var pauseComma: Double = 0.3        // 停顿几秒补逗号
     var pausePeriod: Double = 0.8       // 停顿几秒补句号
@@ -257,8 +257,39 @@ struct OBSCaptionConfig {
     var color = "#ffffff"
 }
 
+/// sun / Sunday / 周日 / 星期天 / 礼拜六 … → 1（星期天）… 7（星期六）；不认识返回 nil
+func parseWeekday(_ text: String) -> Int? {
+    let names: [String: Int] = ["sun": 1, "mon": 2, "tue": 3, "wed": 4, "thu": 5, "fri": 6, "sat": 7,
+                                "日": 1, "天": 1, "一": 2, "二": 3, "三": 4, "四": 5, "五": 6, "六": 7]
+    var k = text.trimmingCharacters(in: .whitespaces).lowercased()
+    for p in ["星期", "周", "礼拜"] where k.hasPrefix(p) { k = String(k.dropFirst(p.count)) }
+    if k.isEmpty { return nil }
+    return names[String(k.prefix(3))] ?? names[k]
+}
+
+let weekdayShort = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"]
+
+/// 字幕记录按时段分文件：days 空 = 每天；from/to 为 HH:MM[:SS]（含 from，不含 to）
+struct TranscriptRule {
+    var days: Set<Int> = []             // 1 = 星期天 … 7 = 星期六（Calendar 的 weekday）
+    var from: HMSTime = (0, 0, 0)
+    var to: HMSTime = (0, 0, 0)
+    var name = ""
+    var text = ""                       // 日志里显示的原样设置
+}
+
+let defaultTranscriptRules: [[String: Any]] = [
+    ["days": ["sun"], "from": "09:15", "to": "10:25", "name": "{pdf1}_{date}"],
+    ["days": ["sun"], "from": "10:30", "to": "12:10", "name": "Worship_{date}"],
+]
+let defaultTranscriptName = "transcript_{date}_{hour}"
+
 struct PresenterConfig {
     var events: [EventSpec] = defaultEventSpecs
+    var transcriptRules: [[String: Any]] = defaultTranscriptRules
+    var transcriptDefault = defaultTranscriptName
+    var hotkeyStats = true              // 记录每次按快捷键（hotkey-usage.csv），退出前在日志里写报告
+    var nextSundayOn: Set<Int> = [6, 7] // 这几天（默认星期五、六）没有今天的文件时，改用接下来那个星期天的文件；空 = 不顺延
     var pdfFolder = "~/Downloads"
     var dateFormat = "yyyyMMdd"
     var pdfPatterns: [String: String] = defaultPDFPatterns
@@ -323,11 +354,16 @@ struct PDFScan {
     var unused: [String] = []   // 含当天日期、但不符合任何规则的 PDF
     var mods: [String: Date] = [:]
     var terms: URL?             // 今日术语文件（terms-yyyymmdd.csv/txt）
+    var fallback = Set<String>()    // 没有今天的文件、改用了接下来那个星期天的 PDF
+    var termsFallback = false       // 今日术语文件也是改用星期天的
     var glossaryStamp = ""      // 术语表文件和今日术语文件的修改时间（变了就重新载入）
 }
 
+/// fallbackRules / fallbackTermsRule：没有今天的文件时改用的规则（今天不是星期天时 = 接下来那个星期天的日期）
 func scanPDFFolder(_ folder: URL, date: String, rules: [String: NSRegularExpression],
-                   termsRule: NSRegularExpression? = nil) -> PDFScan {
+                   termsRule: NSRegularExpression? = nil,
+                   fallbackRules: [String: NSRegularExpression] = [:],
+                   fallbackTermsRule: NSRegularExpression? = nil) -> PDFScan {
     var r = PDFScan()
     r.checked = true
     let items: [URL]
@@ -352,13 +388,28 @@ func scanPDFFolder(_ folder: URL, date: String, rules: [String: NSRegularExpress
     }
     var best: [String: (url: URL, mod: Date)] = [:]
     var bestTerms: (url: URL, mod: Date)?
+    var fbBest: [String: (url: URL, mod: Date)] = [:]
+    var fbTerms: (url: URL, mod: Date)?
     for u in items {
         let name = u.lastPathComponent
         let range = NSRange(location: 0, length: (name as NSString).length)
+        func modOf() -> Date {
+            return (try? u.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? Date.distantPast
+        }
         if let tr = termsRule, tr.firstMatch(in: name, options: [], range: range) != nil {
-            let mod = (try? u.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? Date.distantPast
+            let mod = modOf()
             if bestTerms == nil || mod > bestTerms!.mod { bestTerms = (url: u, mod: mod) }
             continue
+        }
+        if let tr = fallbackTermsRule, tr.firstMatch(in: name, options: [], range: range) != nil {
+            let mod = modOf()
+            if fbTerms == nil || mod > fbTerms!.mod { fbTerms = (url: u, mod: mod) }
+            continue
+        }
+        for (key, re) in fallbackRules where re.firstMatch(in: name, options: [], range: range) != nil {
+            let mod = modOf()
+            if let b = fbBest[key], b.mod >= mod { continue }
+            fbBest[key] = (url: u, mod: mod)
         }
         var matched = false
         for (key, re) in rules where re.firstMatch(in: name, options: [], range: range) != nil {
@@ -372,25 +423,40 @@ func scanPDFFolder(_ folder: URL, date: String, rules: [String: NSRegularExpress
             r.unused.append(name)
         }
     }
+    for (k, v) in fbBest where best[k] == nil {
+        best[k] = v
+        r.fallback.insert(k)
+    }
     for (k, v) in best {
         r.matches[k] = v.url
         r.mods[k] = v.mod
     }
-    r.terms = bestTerms?.url
+    r.terms = bestTerms?.url ?? fbTerms?.url
+    r.termsFallback = bestTerms == nil && fbTerms != nil
     r.unused.sort()
     return r
 }
 
 /// 后台检查：PDF 文件夹 + 今日术语文件 + 术语表文件有没有改过
 func scanEverything(folder: URL, date: String, rules: [String: NSRegularExpression], termsRule: NSRegularExpression?,
+                    fallbackRules: [String: NSRegularExpression] = [:], fallbackTermsRule: NSRegularExpression? = nil,
                     baseDir: URL, glossaryFiles: [URL]) -> PDFScan {
-    var r = scanPDFFolder(folder, date: date, rules: rules, termsRule: termsRule)
+    var r = scanPDFFolder(folder, date: date, rules: rules, termsRule: termsRule,
+                          fallbackRules: fallbackRules, fallbackTermsRule: fallbackTermsRule)
     var stamp: [String] = []
     for u in glossaryFiles { stamp.append(u.lastPathComponent + "@" + String(modDate(u)?.timeIntervalSince1970 ?? 0)) }
-    if let tr = termsRule, baseDir.standardizedFileURL != folder.standardizedFileURL,
-       let b = newestFile(in: [baseDir], matching: tr) {
-        let current = r.terms.flatMap { modDate($0) } ?? Date.distantPast
-        if r.terms == nil || b.mod > current { r.terms = b.url }
+    if baseDir.standardizedFileURL != folder.standardizedFileURL {
+        if let tr = termsRule, let b = newestFile(in: [baseDir], matching: tr) {
+            let current = r.terms.flatMap { modDate($0) } ?? Date.distantPast
+            if r.terms == nil || r.termsFallback || b.mod > current {
+                r.terms = b.url
+                r.termsFallback = false
+            }
+        }
+        if r.terms == nil, let tr = fallbackTermsRule, let b = newestFile(in: [baseDir], matching: tr) {
+            r.terms = b.url
+            r.termsFallback = true
+        }
     }
     if let t = r.terms { stamp.append(t.path + "@" + String(modDate(t)?.timeIntervalSince1970 ?? 0)) }
     r.glossaryStamp = stamp.joined(separator: "|")
@@ -428,6 +494,8 @@ struct GDriveJob {
     var wantPDF = true                  // 下载后检查是不是 PDF
     var isOptional = false              // 云端没有也不算问题（今日术语）
     var extraArgs: [String] = []        // 额外的 rclone 参数（服务账号）
+    var fallbackRules: [String: NSRegularExpression] = [:]   // 云端没有今天的文件时，改找这个日期的（接下来的星期天）
+    var fallbackLabel = ""              // 例如“星期天 20261122”
 }
 
 struct GDriveOutcome {
@@ -542,32 +610,45 @@ func runGDriveJob(_ job: GDriveJob) -> [GDriveOutcome] {
     var outcomes: [GDriveOutcome] = []
     for key in job.keys {
         guard let re = job.rules[key] else { continue }
-        var bestName = ""
-        var bestMod = ""
-        var bestDate = Date.distantPast
-        var count = 0
-        for e in entries {
-            guard let name = e["Name"] as? String else { continue }
-            let range = NSRange(location: 0, length: (name as NSString).length)
-            guard re.firstMatch(in: name, options: [], range: range) != nil else { continue }
-            count += 1
-            let mod = (e["ModTime"] as? String) ?? ""
-            let d = parseRcloneTime(mod) ?? Date.distantPast
-            if bestName.isEmpty || d > bestDate {
-                bestName = name
-                bestMod = mod
-                bestDate = d
+        /// 云端符合规则的文件里最新的那个
+        func newest(_ re: NSRegularExpression) -> (name: String, mod: String, count: Int) {
+            var bestName = ""
+            var bestMod = ""
+            var bestDate = Date.distantPast
+            var count = 0
+            for e in entries {
+                guard let name = e["Name"] as? String else { continue }
+                let range = NSRange(location: 0, length: (name as NSString).length)
+                guard re.firstMatch(in: name, options: [], range: range) != nil else { continue }
+                count += 1
+                let mod = (e["ModTime"] as? String) ?? ""
+                let d = parseRcloneTime(mod) ?? Date.distantPast
+                if bestName.isEmpty || d > bestDate {
+                    bestName = name
+                    bestMod = mod
+                    bestDate = d
+                }
             }
+            return (bestName, bestMod, count)
+        }
+        var (bestName, bestMod, count) = newest(re)
+        var usedFallback = false
+        // 今天不是星期天、云端也没有今天的文件：改用接下来那个星期天的
+        if bestName.isEmpty, let fre = job.fallbackRules[key] {
+            (bestName, bestMod, count) = newest(fre)
+            usedFallback = !bestName.isEmpty
         }
         if bestName.isEmpty {
-            outcomes.append(GDriveOutcome(key: key, ok: job.isOptional, downloaded: false, record: nil,
-                                          message: job.isOptional ? "云端没有（可选）" : "⚠️ 云端文件夹里没有今天的文件"))
+            var msg = job.isOptional ? "云端没有（可选）" : "⚠️ 云端文件夹里没有今天的文件"
+            if job.fallbackRules[key] != nil { msg += "，也没有\(job.fallbackLabel)的" }
+            outcomes.append(GDriveOutcome(key: key, ok: job.isOptional, downloaded: false, record: nil, message: msg))
             continue
         }
+        let note = usedFallback ? "（今天没有，用\(job.fallbackLabel)的）" : ""
         let target = job.dest.appendingPathComponent(bestName)
         if !job.force, let k = job.known[key], k.name == bestName, k.modTime == bestMod, fm.fileExists(atPath: target.path) {
             outcomes.append(GDriveOutcome(key: key, ok: true, downloaded: false, record: k,
-                                          message: "✅ 已是最新：\(bestName)"))
+                                          message: "✅ 已是最新：\(bestName)\(note)"))
             continue
         }
         try? fm.createDirectory(at: tmpDir, withIntermediateDirectories: true, attributes: nil)
@@ -601,7 +682,7 @@ func runGDriveJob(_ job: GDriveJob) -> [GDriveOutcome] {
                                           message: "⚠️ 无法存到 PDF 文件夹：\(error.localizedDescription)"))
             continue
         }
-        var msg = "✅ 已下载：\(bestName)"
+        var msg = "✅ 已下载：\(bestName)\(note)"
         if count > 1 { msg += "（云端有 \(count) 个符合，用最新的）" }
         let rec = GDriveRecord(name: bestName, modTime: bestMod, downloaded: Date())
         outcomes.append(GDriveOutcome(key: key, ok: true, downloaded: true, record: rec, message: msg))
@@ -645,6 +726,52 @@ enum HotAction: String, CaseIterable {
         case .quit: return "退出 Presenter"
         }
     }
+}
+
+/// 快捷键使用报告（写进日志）：每 5 分钟一格（只列有按键的格），每列一个快捷键动作，最后是总计。
+/// events：一天里的按键（当天第几秒、动作名 next/prev…、按键 ⌃⌥→ 等）
+func hotkeyUsageReport(day: String, events: [(sec: Int, action: String, key: String)], test: Bool) -> String {
+    let head = "===== 快捷键使用报告 \(day)" + (test ? "（测试模式）" : "")
+    if events.isEmpty { return head + "：今天没有按快捷键 =====" }
+    let box = 300
+    let known = HotAction.allCases.map { $0.rawValue }
+    let used = Set(events.map { $0.action })
+    let cols = known.filter { used.contains($0) } + used.subtracting(known).sorted()
+    var boxes: [Int: [String: Int]] = [:]
+    var total: [String: Int] = [:]
+    var keys: [String: Int] = [:]
+    for e in events {
+        boxes[e.sec / box, default: [:]][e.action, default: 0] += 1
+        total[e.action, default: 0] += 1
+        if !e.key.isEmpty { keys[e.key, default: 0] += 1 }
+    }
+    func clock(_ s: Int) -> String { return "\(pad2(s / 3600 % 24)):\(pad2(s % 3600 / 60))" }
+    func cell(_ s: String, _ w: Int) -> String { return String(repeating: " ", count: max(0, w - s.count)) + s }
+    let labelW = 11   // "09:15-09:20"
+    let widths = cols.map { max($0.count, String(total[$0] ?? 0).count) }
+    let totalW = max(5, String(events.count).count)
+    func row(_ label: String, _ sum: Int, _ counts: [String: Int]) -> String {
+        var s = label.padding(toLength: labelW, withPad: " ", startingAt: 0) + "  " + cell(String(sum), totalW)
+        for (i, c) in cols.enumerated() { s += "  " + cell(counts[c].map(String.init) ?? "-", widths[i]) }
+        return s
+    }
+    var lines = [head + "（共 \(events.count) 次，每 5 分钟一格）====="]
+    var header = "time".padding(toLength: labelW, withPad: " ", startingAt: 0) + "  " + cell("total", totalW)
+    for (i, c) in cols.enumerated() { header += "  " + cell(c, widths[i]) }
+    lines.append(header)
+    for b in boxes.keys.sorted() {
+        let counts = boxes[b] ?? [:]
+        lines.append(row(clock(b * box) + "-" + clock((b + 1) * box), counts.values.reduce(0, +), counts))
+    }
+    lines.append(row("total", events.count, total))
+    let titles = Dictionary(uniqueKeysWithValues: HotAction.allCases.map { ($0.rawValue, $0.title) })
+    lines.append("动作：" + cols.map { "\($0) = \(titles[$0] ?? $0)" }.joined(separator: "；"))
+    if !keys.isEmpty {
+        lines.append("按键：" + keys.sorted { $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key }
+            .map { "\($0.key) \($0.value) 次" }.joined(separator: "；"))
+    }
+    lines.append("===== 快捷键使用报告结束（明细在 hotkey-usage.csv）=====")
+    return lines.joined(separator: "\n")
 }
 
 let keyCodes: [String: Int] = [
@@ -2127,7 +2254,7 @@ struct TranscriptItem {
     var translated = ""
 }
 
-/// 读字幕记录（transcript-yyyymmdd.txt）
+/// 读字幕记录（transcripts/ 里的 .txt）
 func parseTranscript(_ text: String) -> [TranscriptItem] {
     var items: [TranscriptItem] = []
     var cur: TranscriptItem?
@@ -3365,6 +3492,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
     var validEvents: [ValidEvent] = []
     var rules: [String: NSRegularExpression] = [:]
     var rulePatterns: [String: String] = [:]
+    var fallbackRules: [String: NSRegularExpression] = [:]   // 今天不是星期天时：接下来那个星期天日期的规则
+    var fallbackTermsRule: NSRegularExpression?
+    var fallbackDate: String?
 
     // 状态
     var timeline: [TimelineEvent] = []
@@ -3486,7 +3616,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
     var sentenceMode = true
     var highFidelity = true
     var transcriptHeaderPending = false
-    var reviewMode = false              // --review：只复查字幕记录，然后退出
+    var transcriptRules: [TranscriptRule] = []
+    var transcriptBookNames: [String: String] = [:]   // "日期|pdf1" → 书卷名（同一天固定下来，免得中途换文件）
+    var lastTranscriptURL: URL?
+    var hotkeyCombos: [UInt32: String] = [:]          // 快捷键编号 → ⌃⌥→ 这样的显示名
+    var hotkeyDaysSeen: [String] = []                 // 这次运行中按过快捷键的日子（yyyyMMdd）
+    var hotkeyDaysReported = Set<String>()
+    var reviewMode = false             // --review：只复查字幕记录，然后退出
     var reviewArg: String?
     var reviewBusy = false
 
@@ -3528,6 +3664,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         applyEvents()
         compileRules()
         validateCaption()
+        compileTranscriptRules()
         if let at = atArg {
             let target = dateOn(Calendar.current.startOfDay(for: Date()), at)
             timeOffset = target.timeIntervalSince(Date())
@@ -3591,6 +3728,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        applicationWillTerminateHotkeyReport()
         recognizer?.stop()
         captionServer?.stop()
         hotKeys.unregisterAll()
@@ -3801,6 +3939,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
             if let v = g["termsFile"] as? String, !v.isEmpty { cfg.glossary.termsFile = v }
             if let v = g["fromGoogleDrive"] as? Bool { cfg.glossary.fromGoogleDrive = v }
         }
+        if let t = obj["transcripts"] as? [String: Any] {
+            if let v = t["files"] as? [[String: Any]] { cfg.transcriptRules = v }
+            if let v = t["default"] as? String, !v.trimmingCharacters(in: .whitespaces).isEmpty {
+                cfg.transcriptDefault = v.trimmingCharacters(in: .whitespaces)
+            }
+        }
+        if let v = obj["hotkeyStats"] as? Bool { cfg.hotkeyStats = v }
+        if let v = obj["nextSundayOn"] as? [String] {
+            cfg.nextSundayOn = []
+            for d in v {
+                if let w = parseWeekday(d), w != 1 {
+                    cfg.nextSundayOn.insert(w)
+                } else {
+                    problems.append("nextSundayOn 里的“\(d)”不认识（写 mon … sat），已忽略")
+                }
+            }
+        } else if let v = obj["nextSundayOn"] as? Bool, !v {
+            cfg.nextSundayOn = []
+        }
         if let hk = obj["hotkeys"] as? [String: Any] {
             for (k, v) in hk where !k.hasPrefix("_") {
                 if let arr = v as? [String] {
@@ -3879,6 +4036,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         }
     }
 
+    /// 检查 transcripts.files（字幕记录按时段分文件），有错的项跳过
+    func compileTranscriptRules() {
+        transcriptRules = []
+        for (i, item) in cfg.transcriptRules.enumerated() {
+            let n = i + 1
+            var r = TranscriptRule()
+            var days: [String] = []
+            if let v = item["days"] as? [String] { days = v } else if let v = item["days"] as? String { days = [v] }
+            var bad: String?
+            for d in days {
+                if ["", "*", "all", "daily", "every"].contains(d.trimmingCharacters(in: .whitespaces).lowercased()) { r.days = []; break }
+                if let w = parseWeekday(d) { r.days.insert(w) } else { bad = "days 里的“\(d)”不认识（写 sun、mon … sat）" }
+            }
+            let fromText = (item["from"] as? String) ?? ""
+            let toText = (item["to"] as? String) ?? ""
+            let name = ((item["name"] as? String) ?? "").trimmingCharacters(in: .whitespaces)
+            if let f = parseHMS(fromText) { r.from = f } else { bad = bad ?? "from 的时间“\(fromText)”格式不对（应为 HH:MM）" }
+            if let t = parseHMS(toText) { r.to = t } else { bad = bad ?? "to 的时间“\(toText)”格式不对（应为 HH:MM）" }
+            if bad == nil && seconds(r.to) <= seconds(r.from) { bad = "to 必须比 from 晚" }
+            if name.isEmpty { bad = bad ?? "没有写 name" }
+            let ph = try? NSRegularExpression(pattern: "\\{([A-Za-z0-9_]+)\\}", options: [])
+            let ns = name as NSString
+            for m in ph?.matches(in: name, options: [], range: NSRange(location: 0, length: ns.length)) ?? [] {
+                let k = ns.substring(with: m.range(at: 1))
+                if k != "date" && k != "hour" && cfg.pdfPatterns[k] == nil {
+                    bad = bad ?? "name 里的 {\(k)} 不认识（可用 {date}、{hour} 或 pdfs 里的名字）"
+                }
+            }
+            if let b = bad {
+                problems.append("transcripts.files 第 \(n) 项：\(b)，已忽略")
+                writeLog("⚠️ transcripts.files 第 \(n) 项：\(b)，已忽略")
+                continue
+            }
+            r.name = name
+            let dayText = r.days.isEmpty ? "每天" : r.days.sorted().map { weekdayShort[$0 - 1] }.joined(separator: ",")
+            r.text = "\(dayText) \(shortTime(dateOn(Date(), r.from)))-\(shortTime(dateOn(Date(), r.to))) → \(name).txt"
+            transcriptRules.append(r)
+        }
+    }
+
     /// 今天要不要自动显示实时翻译
     func computeCaptionDay() {
         if let f = captionForced {
@@ -3923,6 +4120,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
             termsRule = try? NSRegularExpression(pattern: p, options: [.caseInsensitive])
             if termsRule == nil { problems.append("glossary.termsFile 不是有效的正则表达式：\(cfg.glossary.termsFile)") }
         }
+        compileFallbackRules()
+    }
+
+    /// 今天是 nextSundayOn 里的日子（默认星期五、六）：再编译一套接下来那个星期天日期的规则，没有今天的文件时用。
+    /// 星期一到四不做（离下个星期天还远，文件多半还没准备好）
+    func compileFallbackRules() {
+        fallbackRules = [:]
+        fallbackTermsRule = nil
+        fallbackDate = nil
+        let cal = Calendar.current
+        let today = dateOverride ?? appNow()
+        let wd = cal.component(.weekday, from: today)     // 1 = 星期天 … 7 = 星期六
+        guard wd != 1 else { return }
+        guard cfg.nextSundayOn.contains(wd) else {
+            writeLog("今天 \(weekdayShort[wd - 1]) 不在 nextSundayOn 里：只用今天日期的文件，不顺延到星期天")
+            return
+        }
+        guard let sunday = cal.date(byAdding: .day, value: 8 - wd, to: today) else { return }
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = cfg.dateFormat
+        let ds = f.string(from: sunday)
+        fallbackDate = ds
+        let date = NSRegularExpression.escapedPattern(for: ds)
+        for (key, pattern) in cfg.pdfPatterns {
+            fallbackRules[key] = try? NSRegularExpression(pattern: pattern.replacingOccurrences(of: "{date}", with: date), options: [])
+        }
+        if cfg.glossary.enabled {
+            fallbackTermsRule = try? NSRegularExpression(pattern: cfg.glossary.termsFile.replacingOccurrences(of: "{date}", with: date),
+                                                         options: [.caseInsensitive])
+        }
+        writeLog("今天 \(weekdayShort[wd - 1])（nextSundayOn）：没有今天日期的文件时，改用星期天 \(ds) 的文件")
+    }
+
+    var fallbackLabel: String {
+        return "星期天 \(fallbackDate ?? "")"
     }
 
     func buildTimeline(_ now: Date) {
@@ -4498,11 +4731,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         let date = pdfDateString()
         let r = rules
         let tr = termsRule
+        let fr = fallbackRules
+        let ftr = fallbackTermsRule
         let base = baseDir
         let files = glossaryFileURLs()
         // 在后台线程读文件夹：第一次读“下载”时系统会弹权限请求，不会卡住画面
         scanQueue.async {
-            let result = scanEverything(folder: folder, date: date, rules: r, termsRule: tr, baseDir: base, glossaryFiles: files)
+            let result = scanEverything(folder: folder, date: date, rules: r, termsRule: tr,
+                                        fallbackRules: fr, fallbackTermsRule: ftr, baseDir: base, glossaryFiles: files)
             DispatchQueue.main.async {
                 self.scanFinished(result)
             }
@@ -4511,6 +4747,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
 
     func rescanNow() {
         scanFinished(scanEverything(folder: pdfFolderURL, date: pdfDateString(), rules: rules, termsRule: termsRule,
+                                    fallbackRules: fallbackRules, fallbackTermsRule: fallbackTermsRule,
                                     baseDir: baseDir, glossaryFiles: glossaryFileURLs()))
     }
 
@@ -4527,7 +4764,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         }
         for key in pdfKeys() where old.matches[key] != r.matches[key] || !old.checked {
             if let u = r.matches[key] {
-                writeLog("\(pdfName(key))：✅ \(u.lastPathComponent)")
+                writeLog("\(pdfName(key))：✅ \(u.lastPathComponent)" + (r.fallback.contains(key) ? "（没有今天的，用\(fallbackLabel)的）" : ""))
             } else if r.readable {
                 writeLog("\(pdfName(key))：⚠️ 还没有符合规则的文件（\(rulePatterns[key] ?? "?")）")
             }
@@ -4717,7 +4954,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         writeLog("Google Drive：\(reason)（\(want.joined(separator: "、"))）")
         let job = GDriveJob(exe: exe, remote: gdriveRemote, folderId: cfg.gdrive.folderId, keys: want,
                             rules: rules, dest: pdfFolderURL, known: gdriveRecords, force: force,
-                            extraArgs: gdriveExtraArgs)
+                            extraArgs: gdriveExtraArgs, fallbackRules: fallbackRules, fallbackLabel: fallbackLabel)
         gdriveQueue.async {
             let outcomes = runGDriveJob(job)
             DispatchQueue.main.async {
@@ -5110,6 +5347,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
 
     func setAppleDisplay(_ d: String) {
         appleDisplay = d
+        if recognizer?.running == true { transcriptHeaderPending = true }
         let name = d == "original" ? "只显示原文" : (d == "translation" ? "只显示译文" : "原文 + 译文")
         writeLog("本机识别字幕显示：\(name)")
         var msg = "字幕显示：\(name)"
@@ -5355,7 +5593,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         termsFetchBusy = true
         let job = GDriveJob(exe: exe, remote: gdriveRemote, folderId: cfg.gdrive.folderId, keys: ["terms"],
                             rules: ["terms": re], dest: pdfFolderURL, known: gdriveRecords, force: false,
-                            exportFormats: "csv,txt", wantPDF: false, isOptional: true, extraArgs: gdriveExtraArgs)
+                            exportFormats: "csv,txt", wantPDF: false, isOptional: true, extraArgs: gdriveExtraArgs,
+                            fallbackRules: fallbackTermsRule.map { ["terms": $0] } ?? [:], fallbackLabel: fallbackLabel)
         gdriveQueue.async {
             let outcomes = runGDriveJob(job)
             DispatchQueue.main.async {
@@ -5393,13 +5632,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         return f.string(from: d)
     }
 
+    /// 这个时刻的字幕记录文件：按 transcripts.files 的时段取名，都不符合时用 transcripts.default
     func transcriptURL(for d: Date) -> URL {
-        return transcriptFolder.appendingPathComponent("transcript-\(dayString(d)).txt")
+        let c = Calendar.current.dateComponents([.weekday, .hour, .minute, .second], from: d)
+        let secs = (c.hour ?? 0) * 3600 + (c.minute ?? 0) * 60 + (c.second ?? 0)
+        var pattern = cfg.transcriptDefault
+        for r in transcriptRules where (r.days.isEmpty || r.days.contains(c.weekday ?? 0))
+            && secs >= seconds(r.from) && secs < seconds(r.to) {
+            pattern = r.name
+            break
+        }
+        let day = dayString(d)
+        var name = pattern.replacingOccurrences(of: "{date}", with: day)
+            .replacingOccurrences(of: "{hour}", with: pad2(c.hour ?? 0))
+        for key in cfg.pdfPatterns.keys where name.contains("{\(key)}") {
+            name = name.replacingOccurrences(of: "{\(key)}", with: transcriptBookName(key, day: day))
+        }
+        name = name.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
+            .trimmingCharacters(in: .whitespaces)
+        if name.isEmpty || name.hasPrefix(".") { name = "transcript_\(day)" + name }
+        if !name.lowercased().hasSuffix(".txt") { name += ".txt" }
+        return transcriptFolder.appendingPathComponent(name)
     }
 
-    func appendTranscript(_ s: String) {
+    /// PDF 文件名去掉日期和扩展名，例如 Genesis-20261122.pdf → Genesis；找不到 PDF 时用 pdfNames 里的名字
+    func transcriptBookName(_ key: String, day: String) -> String {
+        let cacheKey = day + "|" + key
+        if let n = transcriptBookNames[cacheKey] { return n }
+        guard let url = pdfURL(for: key) else { return pdfName(key) }
+        var base = url.deletingPathExtension().lastPathComponent
+        for ds in [pdfDateString(), fallbackDate ?? "", day] where !ds.isEmpty {
+            base = base.replacingOccurrences(of: ds, with: "")
+        }
+        base = base.trimmingCharacters(in: CharacterSet(charactersIn: "-_ .·"))
+        let n = base.isEmpty ? pdfName(key) : base
+        transcriptBookNames[cacheKey] = n
+        return n
+    }
+
+    func appendTranscript(_ s: String, to url: URL) {
         guard cfg.caption.apple.saveTranscript else { return }
-        let url = transcriptURL(for: Date())
         try? FileManager.default.createDirectory(at: transcriptFolder, withIntermediateDirectories: true, attributes: nil)
         let data = Data(s.utf8)
         if let h = try? FileHandle(forWritingTo: url) {
@@ -5412,11 +5684,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
     }
 
     func handleRecord(_ r: CaptionRecord) {
-        if transcriptHeaderPending {
+        guard cfg.caption.apple.saveTranscript else { return }
+        let url = transcriptURL(for: appNow())
+        // 换了文件（进入另一个时段）时，新文件开头也写上设置，复查时每个文件都能单独读
+        if transcriptHeaderPending || url != lastTranscriptURL {
             transcriptHeaderPending = false
-            appendTranscript(transcriptHeader())
+            if url != lastTranscriptURL { writeLog("字幕记录写入 transcripts/\(url.lastPathComponent)") }
+            lastTranscriptURL = url
+            appendTranscript(transcriptHeader(), to: url)
         }
-        appendTranscript(transcriptBlock(r))
+        appendTranscript(transcriptBlock(r), to: url)
     }
 
     func transcriptHeader() -> String {
@@ -5430,9 +5707,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         s += " · 整句翻译" + (sentenceMode ? "开" : "关")
         s += " · 翻译" + (highFidelity ? "高保真" : "快速")
         if testMode { s += " · 测试模式" }
-        s += " =====\n\(glossaryInfo)\n"
+        s += " =====\n" + transcriptParams() + "\n\(glossaryInfo)\n"
         if let g = glossary, !g.todayTerms.isEmpty { s += "今日术语：" + g.todayTerms.joined(separator: "、") + "\n" }
         return s + "\n"
+    }
+
+    /// 当时生效的识别参数，一行 key=value（名字同 config.json 的 caption.apple / glossary），
+    /// 以后可以对照不同讲员的语速调整。断句、标点的数值取识别器里正在用的值
+    func transcriptParams() -> String {
+        func num(_ d: Double) -> String {
+            return d == d.rounded() ? String(Int(d)) : String(format: "%g", d)
+        }
+        func str(_ v: String) -> String {
+            return v.isEmpty || v.contains(" ") ? "\"\(v)\"" : v
+        }
+        let a = cfg.caption.apple
+        let r = recognizer
+        var p: [String] = []
+        p.append("source=\(captionSource)")
+        p.append("language=\(appleLanguage)")
+        p.append("translateTo=\(a.translateTo)")
+        p.append("display=\(appleDisplay)")
+        p.append("inputDevice=\(str(a.inputDevice))")
+        p.append("channel=\(a.channel)")
+        p.append("clearAfterSeconds=\(num(a.clearAfterSeconds))")
+        p.append("sentenceMode=\(r?.sentenceMode ?? sentenceMode)")
+        p.append("sentenceMaxSeconds=\(num(r?.sentenceMaxSeconds ?? a.sentenceMaxSeconds))")
+        p.append("sentencePauseSeconds=\(num(r?.sentencePause ?? a.sentencePauseSeconds))")
+        p.append("translationQuality=\((r?.highFidelity ?? highFidelity) ? "high" : "fast")")
+        p.append("autoPunctuation=\(r?.autoPunctuation ?? a.autoPunctuation)")
+        p.append("pauseComma=\(num(r?.pauseComma ?? a.pauseComma))")
+        p.append("pausePeriod=\(num(r?.pausePeriod ?? a.pausePeriod))")
+        p.append("glossary=\(cfg.glossary.enabled)")
+        p.append("beforeTranslation=\(cfg.glossary.beforeTranslation)")
+        p.append("fuzzy=\(cfg.glossary.fuzzy)")
+        p.append("fuzzyMinLength=\(cfg.glossary.fuzzyMinLength)")
+        p.append("captionLines=\(cfg.caption.lines)")
+        return "参数：" + p.joined(separator: "  ")
     }
 
     /// 一句的记录：原 = 识别原文；改 = 纠正后（Tab 后面是改了什么）；送 = 送去翻译的文字（术语已换成译名）；译 = 译文
@@ -5452,9 +5763,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         return s + "\n"
     }
 
-    func newestTranscript() -> URL? {
-        guard let re = try? NSRegularExpression(pattern: "^transcript-[0-9]{8}\\.txt$", options: []) else { return nil }
-        return newestFile(in: [transcriptFolder], matching: re)?.url
+    /// transcripts 文件夹里的字幕记录（不含 review- 复查报告），带文件名里的日期
+    func transcriptFiles() -> [(url: URL, day: String, mod: Date)] {
+        let fm = FileManager.default
+        guard let names = try? fm.contentsOfDirectory(atPath: transcriptFolder.path),
+              let re = try? NSRegularExpression(pattern: "(20[0-9]{6})", options: []) else { return [] }
+        var out: [(url: URL, day: String, mod: Date)] = []
+        for n in names where n.lowercased().hasSuffix(".txt") && !n.hasPrefix("review-") && !n.hasPrefix(".") {
+            let ns = n as NSString
+            guard let m = re.firstMatch(in: n, options: [], range: NSRange(location: 0, length: ns.length)) else { continue }
+            let u = transcriptFolder.appendingPathComponent(n)
+            out.append((u, ns.substring(with: m.range(at: 1)), modDate(u) ?? .distantPast))
+        }
+        return out
+    }
+
+    /// 某一天的所有字幕记录，按时间先后（最后修改时间）排列
+    func transcripts(on day: String) -> [URL] {
+        return transcriptFiles().filter { $0.day == day }.sorted { $0.mod < $1.mod }.map { $0.url }
+    }
+
+    /// 最近一次有字幕记录的那一天
+    func newestTranscriptDay() -> String? {
+        return transcriptFiles().max { $0.mod < $1.mod }?.day
     }
 
     // MARK: 字幕记录复查
@@ -5463,24 +5794,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
     func startReviewMode() {
         writeLog("复查模式（--review）")
         highFidelity = cfg.caption.apple.translationQuality != "fast"
-        var file: URL?
+        var files: [URL] = []
+        var missing = "（transcripts 文件夹是空的）"
         if let a = reviewArg?.trimmingCharacters(in: .whitespaces), !a.isEmpty {
             if a.count == 8, Int(a) != nil {
-                file = transcriptFolder.appendingPathComponent("transcript-\(a).txt")
+                files = transcripts(on: a)
+                missing = "：\(a) 这一天没有"
             } else {
-                file = expandPath(a, base: baseDir)
+                let f = expandPath(a, base: baseDir)
+                if FileManager.default.fileExists(atPath: f.path) { files = [f] }
+                missing = "：\(f.path)"
             }
-        } else {
-            file = newestTranscript()
+        } else if let d = newestTranscriptDay() {
+            files = transcripts(on: d)
         }
-        guard let f = file, FileManager.default.fileExists(atPath: f.path) else {
-            let msg = "没有找到字幕记录" + (file.map { "：\($0.path)" } ?? "（transcripts 文件夹是空的）")
+        guard !files.isEmpty else {
+            let msg = "没有找到字幕记录" + missing
             writeLog("⚠️ " + msg)
             infoHUD.show("Presenter 复查：\(msg)", on: builtInScreen() ?? NSScreen.main, seconds: 8)
             DispatchQueue.main.asyncAfter(deadline: .now() + 8) { NSApp.terminate(nil) }
             return
         }
-        runReview(f) {
+        runReview(files) {
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) { NSApp.terminate(nil) }
         }
     }
@@ -5535,29 +5870,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         return nil
     }
 
-    func runReview(_ file: URL, done: (() -> Void)? = nil) {
+    /// 复查一个或几个字幕记录文件（同一天分成几个文件时合在一起），结果存成 review-日期.txt
+    func runReview(_ files: [URL], done: (() -> Void)? = nil) {
         guard !reviewBusy else {
             infoHUD.show("正在复查，请稍候…", on: builtInScreen() ?? NSScreen.main, seconds: 3)
             return
         }
-        guard let text = readTextFile(file) else {
-            infoHUD.show("无法读取 \(file.lastPathComponent)", on: builtInScreen() ?? NSScreen.main, seconds: 6)
-            done?()
-            return
+        var items: [TranscriptItem] = []
+        for file in files {
+            guard let text = readTextFile(file) else {
+                infoHUD.show("无法读取 \(file.lastPathComponent)", on: builtInScreen() ?? NSScreen.main, seconds: 6)
+                done?()
+                return
+            }
+            items += parseTranscript(text)
         }
+        guard let first = files.first else { done?(); return }
         reviewBusy = true
-        let items = parseTranscript(text)
-        let name = file.lastPathComponent
+        let name = files.map { $0.lastPathComponent }.joined(separator: "、")
         var day: String?
-        if let re = try? NSRegularExpression(pattern: "([0-9]{8})", options: []),
-           let m = re.firstMatch(in: name, options: [], range: NSRange(location: 0, length: (name as NSString).length)) {
-            day = (name as NSString).substring(with: m.range(at: 1))
+        if let re = try? NSRegularExpression(pattern: "(20[0-9]{6})", options: []),
+           let m = re.firstMatch(in: first.lastPathComponent, options: [], range: NSRange(location: 0, length: (first.lastPathComponent as NSString).length)) {
+            day = (first.lastPathComponent as NSString).substring(with: m.range(at: 1))
         }
         let g = glossaryForReview(day: day)
         infoHUD.show("正在复查 \(name)（\(items.count) 句）…\n有变化的句子要重新翻译，可能要一两分钟", on: builtInScreen() ?? NSScreen.main, seconds: nil)
         Task { @MainActor in
-            let report = await self.makeReview(items: items, glossary: g, file: file)
-            let out = file.deletingLastPathComponent().appendingPathComponent(name.replacingOccurrences(of: "transcript-", with: "review-"))
+            let report = await self.makeReview(items: items, glossary: g, fileLabel: name)
+            let outName = day.map { "review-\($0).txt" } ?? "review-" + first.lastPathComponent
+            let out = first.deletingLastPathComponent().appendingPathComponent(outName)
             do {
                 try report.write(to: out, atomically: true, encoding: .utf8)
                 writeLog("复查完成：\(out.path)")
@@ -5574,7 +5915,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
 
     /// 生成复查报告：没认出的名字、自动纠正了什么、用现在的术语表重新处理后有变化的句子
     @MainActor
-    func makeReview(items: [TranscriptItem], glossary g: CaptionGlossary, file: URL) async -> String {
+    func makeReview(items: [TranscriptItem], glossary g: CaptionGlossary, fileLabel: String) async -> String {
         var translators: [String: ReviewTranslate] = [:]
         var noTranslator = Set<String>()
         var changed: [String] = []
@@ -5641,7 +5982,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         f.locale = Locale(identifier: "en_US_POSIX")
         f.dateFormat = "yyyy-MM-dd HH:mm"
         var r = "Presenter 字幕复查\n"
-        r += "字幕记录：\(file.lastPathComponent)（\(items.count) 句，其中翻译了 \(translatedCount) 句）\n"
+        r += "字幕记录：\(fileLabel)（\(items.count) 句，其中翻译了 \(translatedCount) 句）\n"
         r += "复查时间：\(f.string(from: Date()))\n"
         r += "\(g.summary)\n"
         if !g.todayTerms.isEmpty { r += "今日术语：" + g.todayTerms.joined(separator: "、") + "\n" }
@@ -5711,6 +6052,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
                     let st = hotKeys.register(c, id: nextID)
                     if st == 0 {
                         hotkeyActions[nextID] = action
+                        hotkeyCombos[nextID] = c.display
                         nextID += 1
                         shown.append(c.display)
                         if hotkeyLabels[action] == nil { hotkeyLabels[action] = c.display }
@@ -5733,7 +6075,69 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
 
     func handleHotKey(_ id: UInt32) {
         guard let action = hotkeyActions[id] else { return }
+        recordHotkey(action, combo: hotkeyCombos[id] ?? "")
         run(action)
+    }
+
+    // MARK: 快捷键使用统计
+
+    var hotkeyUsageURL: URL {
+        return baseDir.appendingPathComponent("hotkey-usage.csv")
+    }
+
+    var hotkeyMode: String {
+        return testMode ? "test" : "live"
+    }
+
+    /// 每按一次快捷键记一行到 hotkey-usage.csv（所有日子都在这一个文件里，方便以后用 Excel 统计）
+    func recordHotkey(_ action: HotAction, combo: String) {
+        guard cfg.hotkeyStats else { return }
+        let now = appNow()
+        let day = dayString(now)
+        // 跨过午夜：先给前一天写报告
+        for d in hotkeyDaysSeen where d != day && !hotkeyDaysReported.contains(d) { reportHotkeyUsage(day: d) }
+        if !hotkeyDaysSeen.contains(day) { hotkeyDaysSeen.append(day) }
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd,HH:mm:ss"
+        let name = action.title.replacingOccurrences(of: ",", with: "，")
+        var line = "\(f.string(from: now)),\(action.rawValue),\(combo.replacingOccurrences(of: ",", with: " ")),\(name),\(hotkeyMode)\n"
+        let url = hotkeyUsageURL
+        if !FileManager.default.fileExists(atPath: url.path) { line = "date,time,action,key,name,mode\n" + line }
+        let data = Data(line.utf8)
+        if let h = try? FileHandle(forWritingTo: url) {
+            h.seekToEndOfFile()
+            h.write(data)
+            h.closeFile()
+        } else {
+            try? data.write(to: url)
+        }
+    }
+
+    /// 在日志里写某一天的快捷键使用报告：每 5 分钟一格，各快捷键次数，再加总计。
+    /// 读的是 hotkey-usage.csv，所以同一天重开过 Presenter 的话，报告是全天累计。
+    func reportHotkeyUsage(day: String) {
+        hotkeyDaysReported.insert(day)
+        let dayDash = day.count == 8
+            ? "\(day.prefix(4))-\(day.dropFirst(4).prefix(2))-\(day.suffix(2))" : day
+        var events: [(sec: Int, action: String, key: String)] = []
+        if let text = readTextFile(hotkeyUsageURL) {
+            for line in text.components(separatedBy: .newlines) {
+                let p = line.components(separatedBy: ",")
+                guard p.count >= 6, p[0] == dayDash, p[5] == hotkeyMode,
+                      let t = parseHMS(p[1]) else { continue }
+                events.append((seconds(t), p[2], p[3]))
+            }
+        }
+        writeLog(hotkeyUsageReport(day: dayDash, events: events, test: testMode))
+    }
+
+    func applicationWillTerminateHotkeyReport() {
+        guard cfg.hotkeyStats, !reviewMode else { return }
+        var days = hotkeyDaysSeen
+        let today = dayString(appNow())
+        if !days.contains(today) { days.append(today) }
+        for d in days where !hotkeyDaysReported.contains(d) { reportHotkeyUsage(day: d) }
     }
 
     func run(_ action: HotAction) {
@@ -6119,7 +6523,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         addAction(gm, nil, "重新载入术语表", #selector(menuReloadGlossary))
         gm.addItem(NSMenuItem.separator())
         addAction(gm, nil, "打开今天的字幕记录", #selector(menuOpenTranscript))
-        addAction(gm, nil, reviewBusy ? "正在复查…" : "复查最近的字幕记录（生成 review 文件）", #selector(menuReview))
+        addAction(gm, nil, reviewBusy ? "正在复查…" : "复查最近一天的字幕记录（生成 review 文件）", #selector(menuReview))
         addAction(gm, nil, "打开字幕记录文件夹", #selector(menuOpenTranscriptFolder))
         gItem.submenu = gm
         cm.addItem(gItem)
@@ -6210,16 +6614,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         rebuildGlossary("手动重新载入", announce: true)
     }
     @objc func menuOpenTranscript() {
-        let url = transcriptURL(for: Date())
-        if FileManager.default.fileExists(atPath: url.path) {
+        // 正在写的那个文件；没有就打开今天最近写的那个
+        if let url = lastTranscriptURL ?? transcripts(on: dayString(appNow())).last,
+           FileManager.default.fileExists(atPath: url.path) {
             openInTextEdit(url)
         } else {
             infoHUD.show("今天还没有字幕记录（本机识别开始后才有）", on: builtInScreen(), seconds: 4)
         }
     }
     @objc func menuReview() {
-        if let u = newestTranscript() {
-            runReview(u)
+        if let d = newestTranscriptDay() {
+            runReview(transcripts(on: d))
         } else {
             infoHUD.show("还没有字幕记录（本机识别开始后才有）", on: builtInScreen(), seconds: 4)
         }
@@ -6324,6 +6729,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
             writeLog("Google Drive：rclone = \(exe.path)；\(gdriveAccountText)；文件夹 \(cfg.gdrive.folderId)；下载到 \(pdfFolderURL.path)")
         }
         writeLog("本机识别：整句翻译\(sentenceMode ? "开" : "关")（最多等 \(cfg.caption.apple.sentenceMaxSeconds) 秒，停顿 \(cfg.caption.apple.sentencePauseSeconds) 秒算一句）；翻译\(highFidelity ? "高保真" : "快速")；字幕记录\(cfg.caption.apple.saveTranscript ? "保存到 transcripts 文件夹" : "不保存")")
+        if cfg.caption.apple.saveTranscript {
+            for r in transcriptRules { writeLog("字幕记录分文件：\(r.text)") }
+            writeLog("字幕记录分文件：其他时间 → \(cfg.transcriptDefault).txt")
+        }
+        writeLog("快捷键统计：" + (cfg.hotkeyStats ? "记到 hotkey-usage.csv，退出前在日志里写报告" : "关"))
         writeLog("本机识别补标点：" + (cfg.caption.apple.autoPunctuation == "off" ? "关" :
                  "\(cfg.caption.apple.autoPunctuation == "all" ? "普通话和英语" : "普通话")，停顿 \(cfg.caption.apple.pauseComma) 秒补逗号、\(cfg.caption.apple.pausePeriod) 秒补句号"))
         writeLog("字幕左右留白 \(cfg.caption.marginPercent)%；" + (cfg.obs.enabled ? "OBS 字幕页 http://127.0.0.1:\(cfg.obs.port)/caption（\(cfg.obs.visibility == "auto" ? "字幕时段内一直显示" : "跟投影字幕条一起显示/隐藏")）" : "OBS 字幕叠加已关闭"))

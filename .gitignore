@@ -3,6 +3,7 @@ rclone
 bin/
 presenter.log
 cron.log
+hotkey-usage.csv
 gdrive-state.json
 transcripts/
 caption-dump-*

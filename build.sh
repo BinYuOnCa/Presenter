@@ -130,6 +130,7 @@ gdrive-sa.json
 *.key.json
 presenter.log
 cron.log
+hotkey-usage.csv
 gdrive-state.json
 transcripts/
 caption-dump-*
@@ -215,5 +216,5 @@ echo "   彩排：./presenter.sh test tomorrow"
 echo "   注意：每次重新编译后，第一次运行时系统会询问能否读取“下载”文件夹，请点“好/允许”。"
 echo "         第一次使用本机识别时，还会询问“麦克风”和“语音识别”权限，也请点“允许”。"
 echo "   自动启动：./presenter.sh autostart on 09:09（每周日 9:09）"
-echo "   复查字幕记录：./presenter.sh review（最近一次；或 review 20261115）"
+echo "   复查字幕记录：./presenter.sh review（最近一天；或 review 20261115）"
 echo "   OBS 字幕页：http://127.0.0.1:8765/caption（OBS › 来源 › 浏览器）"
