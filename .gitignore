@@ -26,3 +26,7 @@ images/LogoNew.png
 gdrive-sa.json
 *-sa.json
 *.key.json
+
+# 个人的Prompt 记录，不放入仓库
+PromptHistory.md
+
