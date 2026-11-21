@@ -9,6 +9,7 @@ gdrive-sa.json
 *.key.json
 presenter.log
 cron.log
+hotkey-usage.csv
 gdrive-state.json
 transcripts/
 caption-dump-*

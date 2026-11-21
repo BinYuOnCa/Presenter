@@ -8,7 +8,7 @@
 #   ./presenter.sh autostart on [09:09] [sun|mon|…|daily]   用 crontab 定时自动启动（默认每周日 09:09）
 #   ./presenter.sh autostart off|status  取消 / 查看自动启动
 #   ./presenter.sh update                从 GitHub 的 release 分支更新到最新版本
-#   ./presenter.sh review [20261115]     复查字幕记录（默认最近一次）
+#   ./presenter.sh review [20261115]     复查字幕记录（默认最近一天）
 #   ./presenter.sh log                   看实时日志（Ctrl+C 结束）
 #
 # 自动启动：到时 Mac 必须开机、已登录且没有锁屏（合盖睡眠时 cron 不会运行，错过不补）。

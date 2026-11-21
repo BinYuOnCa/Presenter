@@ -1,10 +1,10 @@
-# Presenter 操作手册
+# 直播小助手（Presenter）操作手册
 
-橡城华人希望教会主日直播投影控制程序 · Nov 15, 2026 · @Someone
+橡城华人希望教会主日直播投影控制程序 · Nov 15, 2026 
 
 ## 一、概况
 
-Presenter 是装在直播用 MacBook Air 上的投影控制程序（本手册对应 2.4 版）：主日早上自动启动，按时间表在投影上切换欢迎页、主日学 PDF、时钟、倒计时、敬拜 PDF，需要时在下方叠加实时翻译字幕，12:15 自动退出。OBS 在内建屏上照常直播，两者互不干扰。
+直播小助手（以下称Presenter） 是装在直播用 MacBook Air 上的投影控制程序（本手册对应 2.4 版）：主日早上自动启动，按时间表在投影上切换欢迎页、主日学 PDF、时钟、倒计时、敬拜 PDF，需要时在下方叠加实时翻译字幕，12:15 自动退出。OBS 在内建屏上照常直播，两者互不干扰。
 
 **两块屏幕的分工**
 
@@ -120,6 +120,7 @@ cd ~/Presenter
 
 - `SundaySchool-20261122` 这种中间有大写的不符合规则。
 - 手动下载时浏览器可能生成 `20261122 (1).pdf`，这种不会被使用。
+- 星期五、六没有今天日期的文件，就自动顺延用接下来那个星期天的（周六直接 `presenter.sh test` 也能下载、显示明天的 PDF）；有今天的文件时总是用今天的；星期一到四不顺延。哪几天顺延：`"nextSundayOn": ["fri", "sat"]`（`[]` = 不顺延）。
 - 每月第一个星期天要显示实时翻译：敬拜 PDF 里 10:40 以后的页，把下方 1/5 留白。
 - 今日术语表格：A 列中文、B 列英文、C 列常被识别成的写法；写讲员名字和这次经文里不常见的人名地名。只对本机识别有效。
 
@@ -246,13 +247,13 @@ Presenter 运行时在本机提供字幕网页 `http://127.0.0.1:8765/caption`�
 **复查步骤**
 
 1. **生成复查报告**：
-   - Presenter 还在运行：菜单 › 实时翻译 › 术语表和字幕记录 › 复查最近的字幕记录。
-   - 已退出：`~/Presenter/presenter.sh review`（某天：`--review 20261115`）。不会投影，生成 `transcripts/review-日期.txt` 并用 TextEdit 打开。
+   - Presenter 还在运行：菜单 › 实时翻译 › 术语表和字幕记录 › 复查最近一天的字幕记录。
+   - 已退出：`~/Presenter/presenter.sh review`（某天：`--review 20261115`）。不会投影，同一天的几个字幕记录文件合在一起复查，生成 `transcripts/review-日期.txt` 并用 TextEdit 打开。
 2. **看报告“一、译文里的人名、地名”**：没认出或译错的名字（标“像拼音”的多半是没认出的中文名字）→ 加一行 `中文,English`；原文的字也错了 → 错的写法放第 3 列。
 3. **看“二、自动纠正”**：
    - “已改”里改错的 → 加一行 `!那几个字`。
    - “可能听错”确实是听错，而且这个写法平时不会说 → 加到那个词的第 3 列；平时也会说的不要加。
-4. **（可选）用 ⌘F 扫一眼字幕记录** `transcripts/transcript-日期.txt`，按下表处理。
+4. **（可选）用 ⌘F 扫一眼字幕记录** `transcripts/` 里那天的文件（主日学 `书卷名_日期.txt`、敬拜 `Worship_日期.txt`、其他时间 `transcript_日期_小时.txt`），按下表处理。
 5. **保存后再复查一次**：看报告“三”里每句的旧译 / 新译，都对就完成。
 
 | 字幕记录里看到 | 是什么问题 | `glossary-local.csv` 里怎么写 |
@@ -264,6 +265,7 @@ Presenter 运行时在本机提供字幕网页 `http://127.0.0.1:8765/caption`�
 | 英文讲员：`原：……Oak Ville……` | 英文识别错 | `橡城,Oakville,,Oak Ville` |
 
 字幕记录每句四行：`原` = 识别原文，`改` = 纠正后（后面注明改了什么），`送` = 送去翻译的文字，`译` = 译文。
+每段开头的 `参数：` 行记着当时生效的识别参数（`clearAfterSeconds`、`sentenceMode`、`sentencePauseSeconds`、`pauseComma`、`pausePeriod` 等，名字同 `config.json`）。复查时对照讲员的语速调整：标点太少就调小 `pauseComma` / `pausePeriod`，一句话被切断就调大 `sentencePauseSeconds`。
 
 ## 七、快捷键清单
 
@@ -291,6 +293,7 @@ Presenter 运行时在本机提供字幕网页 `http://127.0.0.1:8765/caption`�
 - 改快捷键：`config.json` 的 `hotkeys`，写法如 `"ctrl+alt+right"`。欢迎页、时钟、倒计时也可以配快捷键（`welcomeNow`、`clockNow`、`countdownNow`，默认没有）。
 - 用翻页笔：在 `next` 里加 `"pagedown"`，`prev` 里加 `"pageup"`。
 - macOS 15 起不允许只用 Option 的全局快捷键，组合里要带 ctrl 或 cmd。
+- 使用统计：每按一次快捷键记到 `hotkey-usage.csv`（所有日子一个文件，可用 Excel 统计）；Presenter 退出前在 `presenter.log` 里写当天报告：每 5 分钟一格的各快捷键次数和总计。不想记录：`config.json` 里 `"hotkeyStats": false`。
 
 ## 八、菜单栏图标和菜单
 
@@ -318,7 +321,7 @@ Presenter 运行时在本机提供字幕网页 `http://127.0.0.1:8765/caption`�
 - **实时翻译**：
   - 字幕来源（Kaleo / 本机识别）；显示/隐藏；自动 / 显示 / 隐藏。
   - 本机识别：状态、识别语言、显示方式、整句翻译、翻译质量（高保真 / 快速）、翻译平均用时、音频输入。
-  - 术语表和字幕记录：术语表和今日术语的条数、打开教会术语表、打开今日术语、重新载入术语表、打开今天的字幕记录、复查最近的字幕记录、打开字幕记录文件夹。
+  - 术语表和字幕记录：术语表和今日术语的条数、打开教会术语表、打开今日术语、重新载入术语表、打开今天的字幕记录、复查最近一天的字幕记录、打开字幕记录文件夹。
   - OBS：字幕叠加状态（是否已连接）、复制 OBS 字幕网址、在浏览器里预览 OBS 字幕页、显示方式（跟投影字幕条一起 / 字幕时段内一直显示）。
   - Kaleo：显示方式（提取文字 / 原网页）、重新载入翻译网页、打开可点击的翻译网页窗口、保存网页结构和截图。
 - **工具**：打开 Presenter 文件夹、查看日志。
@@ -369,7 +372,7 @@ Presenter 运行时在本机提供字幕网页 `http://127.0.0.1:8765/caption`�
 | 自动纠正把对的词改错了 | 读音相同或第 3 列写法太常见 | `glossary-local.csv` 加一行 `!那个词`；或删掉那个第 3 列写法 |
 | 菜单显示“术语表有 N 行看不懂” | 格式不对，或用 Numbers 保存成了别的格式 | 看日志里的行号；用 TextEdit 改成 `中文,English,…` 格式 |
 | 翻译前替换让译文变别扭 | 中英夹杂的句子翻译得不好 | 给那个词只写中文；普遍如此就把 `glossary.beforeTranslation` 改成 `false` |
-| `--review` 没反应 | Presenter 已经在运行 | 用菜单 › 术语表和字幕记录 › 复查最近的字幕记录 |
+| `--review` 没反应 | Presenter 已经在运行 | 用菜单 › 术语表和字幕记录 › 复查最近一天的字幕记录 |
 | 字幕标点太少、句子很长 | 讲员语速快，停顿短 | 把 `caption.apple.pauseComma` / `pausePeriod` 调小（如 0.25 / 0.6）；字幕记录里看效果 |
 | 标点太多、句子断得太碎 | 停顿的标准太低 | 把这两个数调大；不要自动补标点就把 `caption.apple.autoPunctuation` 改成 `off` |
 | 字幕最下面一行的字会变 | 那一行是正在说的话，识别结果还在修正 | 正常；上面写完的行不会再变 |
@@ -407,7 +410,7 @@ Presenter 运行时在本机提供字幕网页 `http://127.0.0.1:8765/caption`�
 | `--input "MacBook"` | 这次用哪个音频输入（名字包含即可；`""` = 系统默认） |
 | `--channel 1` | 只用第 1 路输入（0 = 混合） |
 | `--lang en` | 这次识别英语（`zh` = 普通话） |
-| `--review` / `--review 20261115` | 不投影，只复查最近一次 / 某一天的字幕记录 |
+| `--review` / `--review 20261115` | 不投影，只复查最近一天 / 某一天的字幕记录 |
 
 **常用组合**
 
@@ -431,6 +434,7 @@ Presenter 运行时在本机提供字幕网页 `http://127.0.0.1:8765/caption`�
 | `gdrive.remote` | `gdrive` | 不用服务账号时 rclone 里的名字（Air 旧设置是 `GoogleDrive`） |
 | `caption.url` | Kaleo 翻译网页 | 在 `config-local.json` |
 | `gdrive.recheckBeforeMinutes` / `waitSeconds` | 4 / 60 | PDF 开始前几分钟再检查；到点还在下载时最多等几秒 |
+| `nextSundayOn` | `["fri", "sat"]` | 这几天没有今天日期的文件时，下载和使用接下来那个星期天的 PDF、今日术语；`[]` = 不顺延 |
 | `extend.minutes` / `warnSeconds` / `warnFor` | 2 / 60 / pdf1、pdf2 | 每次延长几分钟、提前几秒提醒、哪些画面提醒 |
 | `caption.source` | `kaleo` | 默认字幕来源，`apple` = 本机识别 |
 | `caption.when` | `firstSunday` | 哪天自动显示：`firstSunday`、`sunday`、`always`、`never` |
@@ -446,6 +450,8 @@ Presenter 运行时在本机提供字幕网页 `http://127.0.0.1:8765/caption`�
 | `caption.apple.sentenceMode` / `sentenceMaxSeconds` / `sentencePauseSeconds` | `true` / 7 / 1.2 | 整句翻译、最多等几秒、停顿几秒算一句 |
 | `caption.apple.translationQuality` | `high` | `high` = 高保真，`fast` = 快速 |
 | `caption.apple.saveTranscript` | `true` | 保存字幕记录到 `transcripts/` |
+| `transcripts.files` / `default` | 星期天 9:15–10:25 `{pdf1}_{date}`、10:30–12:10 `Worship_{date}` / `transcript_{date}_{hour}` | 字幕记录按时段分文件：`days`（sun…sat，不写 = 每天）、`from`、`to`（不含）、`name`；都不符合用 `default` |
+| `hotkeyStats` | `true` | 快捷键使用记到 `hotkey-usage.csv`，退出前在日志里写报告 |
 | `caption.apple.autoPunctuation` / `pauseComma` / `pausePeriod` | `zh` / 0.3 / 0.8 | 按停顿补标点：`zh` 只对普通话 / `all` / `off`；停顿几秒补逗号、句号 |
 | `glossary.enabled` / `files` | `true` / glossary-local.csv、glossary-bible.csv、glossary.csv | 术语表开关和文件（前面的优先） |
 | `glossary.beforeTranslation` | `true` | 翻译前把术语换成译名 |
@@ -479,9 +485,10 @@ Presenter 运行时在本机提供字幕网页 `http://127.0.0.1:8765/caption`�
 | `autostart.sh` | 旧入口，等于 `presenter.sh autostart` | 自动更新 |
 | `rclone` | 从 Google Drive 下载用的工具 | 不动 |
 | `pdf/sample.pdf` | 只在测试模式使用 | 自动更新 |
-| `transcripts/transcript-日期.txt` | 本机识别的字幕记录 | 自动生成 |
+| `transcripts/书卷名_日期.txt`、`Worship_日期.txt`、`transcript_日期_小时.txt` | 本机识别的字幕记录（按时段分文件，见 `transcripts` 设置） | 自动生成 |
 | `transcripts/review-日期.txt` | 字幕复查报告 | 自动生成 |
-| `presenter.log` | 运行日志（菜单 › 工具 › 查看日志） | 自动生成 |
+| `presenter.log` | 运行日志（菜单 › 工具 › 查看日志）；退出前写当天的快捷键使用报告 | 自动生成 |
+| `hotkey-usage.csv` | 每次按快捷键的记录（统计使用频率用） | 自动生成 |
 | `cron.log` | 自动启动记录 | 自动生成 |
 | `gdrive-state.json` | 上次从 Google Drive 下载的版本（删掉也没关系） | 自动生成 |
 | `caption-dump-*` | “保存网页结构和截图”生成（调整 Kaleo 用） | 自动生成 |

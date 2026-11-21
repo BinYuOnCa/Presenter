@@ -103,6 +103,8 @@ curl -fsSLO https://raw.githubusercontent.com/BinYuOnCa/Presenter/release/presen
 - 菜单栏图标 › **从 Google Drive 重新下载**：随时手动再取一次。正在显示的 PDF 会换成新版，停在原来那一页。
 - 到点时还在下载：先显示前一个画面（欢迎页 / “敬拜马上开始!”），下载好立刻显示，最多等 1 分钟。
 
+**星期五、六：** 云端和“下载”里都没有今天日期的文件，就顺延用接下来那个星期天日期的（例如星期六 20261121 用 `Sunday-20261122`、`20261122`；今日术语 `terms-` 也一样）。周五、周六彩排不用加 `--date` 也能看到这个主日的 PDF。有今天日期的文件时总是用今天的。日志和状态提示里会注明“今天没有，用星期天 20261122 的”。星期一到四不做顺延查找。哪几天顺延：`config.json` 的 `"nextSundayOn": ["fri", "sat"]`（`[]` = 不顺延）。
+
 **取不到时：** 没联网、云端没找到今天的 Slides、Google 出错……都会自动重试；仍然不行就用“下载”里已有的同名 PDF，菜单栏标 ⚠️，状态提示写明原因。
 所以想保险的话，周六手动放一份 PDF 到“下载”，就是备份。
 
@@ -272,7 +274,28 @@ Air 自己从 **Maono ProStudio 2x2 Lite**（和 OBS 同一个输入，互不影
 （两个字的词读音相同的太多，不做读音纠正；需要时把错误写法写进第 3 列。）
 
 **字幕记录**
-每次用本机识别，Presenter 都把识别和翻译存到 `transcripts/transcript-20261115.txt`（每天一个文件），每句一段：
+每次用本机识别，Presenter 都把识别和翻译存到 `transcripts/` 文件夹，按时段分文件（`config.json` 的 `transcripts`，可以自己改）：
+
+| 时段 | 文件名 | 例子 |
+| --- | --- | --- |
+| 星期天 9:15–10:25 | 书卷名_日期（书卷名取自 pdf1 的文件名，去掉日期） | `Genesis_20261122.txt`（pdf1 是 `Genesis-20261122.pdf`） |
+| 星期天 10:30–12:10 | Worship_日期 | `Worship_20261122.txt` |
+| 其他时间 | transcript_日期_小时（24 小时制） | `transcript_20261122_14.txt` |
+
+```json
+"transcripts": {
+  "files": [
+    { "days": ["sun"], "from": "09:15", "to": "10:25", "name": "{pdf1}_{date}" },
+    { "days": ["sun"], "from": "10:30", "to": "12:10", "name": "Worship_{date}" }
+  ],
+  "default": "transcript_{date}_{hour}"
+}
+```
+- `files` 从上往下找第一条符合的；`days` 写 `sun` `mon` `tue` `wed` `thu` `fri` `sat`（也可写“周日”“周一”…），不写 = 每天；`from` 含、`to` 不含（10:25:00 起算下一段）。
+- `name` 里可用 `{date}`（yyyymmdd）、`{hour}`（两位小时）、`{pdf1}` / `{pdf2}`（那个 PDF 的文件名去掉日期和 `.pdf`；找不到 PDF 时用 `pdfNames` 里的名字）。`.txt` 自动加上。
+- 写错的项启动时在菜单栏标 ⚠️ 并跳过；启动日志里列出每条规则。
+
+每句一段：
 
 ```
 [10:41:05]
@@ -282,18 +305,24 @@ Air 自己从 **Maono ProStudio 2x2 Lite**（和 OBS 同一个输入，互不影
 译：Today we look at the story of Elisha.
 ```
 `原` = 识别出来的原文；`改` = 纠正后（后面是改了什么，没改就没有这一行）；`送` = 送去翻译的文字（术语已换成译名）；`译` = 译文。
-每段开头的 `=====` 行记着当时的设置（语言、整句翻译、翻译质量）和用了哪些术语表、今日术语。
+每段开头的 `=====` 行记着当时的设置（语言、整句翻译、翻译质量），下面一行 `参数：` 记着当时生效的全部识别参数，再下面是用了哪些术语表、今日术语：
+```
+===== 2026-11-22 10:40:12 本机识别：普通话 → 英语（zh-CN→en-US） · 整句翻译开 · 翻译高保真 =====
+参数：source=apple  language=zh-CN  translateTo=auto  display=both  inputDevice="Maono ProStudio 2x2 Lite"  channel=0  clearAfterSeconds=15  sentenceMode=true  sentenceMaxSeconds=7  sentencePauseSeconds=1.2  translationQuality=high  autoPunctuation=zh  pauseComma=0.3  pausePeriod=0.8  glossary=true  beforeTranslation=true  fuzzy=today  fuzzyMinLength=3  captionLines=3
+```
+参数名和 `config.json` 的 `caption.apple` / `glossary` 里一样，方便以后对照不同讲员的语速调整（例如某位讲员讲得快、标点太少，就把那天的 `pauseComma` / `pausePeriod` 调小再比较）。
+开始识别、换语言、切换整句翻译 / 翻译质量 / 显示方式、术语表重新载入时都会再写一段；换到另一个文件时，新文件开头也会写，每个文件都能单独复查。
 
 #### 从字幕记录整理术语表：具体步骤（每个用本机识别的主日后，约 10–15 分钟）
 
 **第 1 步：生成复查报告**
-- Presenter 还在运行：菜单 › 实时翻译 › 术语表和字幕记录 › **复查最近的字幕记录**。
+- Presenter 还在运行：菜单 › 实时翻译 › 术语表和字幕记录 › **复查最近一天的字幕记录**。
 - 已经退出（12:15 以后）：终端运行
   ```bash
-  ~/Presenter/presenter.sh review              # 最近一次的字幕记录
+  ~/Presenter/presenter.sh review              # 最近一天的字幕记录
   ~/Presenter/presenter.sh review 20261115     # 某一天的
   ```
-  不会投影，只做复查。几十秒到一两分钟后，`transcripts/review-20261115.txt` 会自动用 TextEdit 打开，Presenter 随后自己退出。
+  不会投影，只做复查。同一天的几个文件（例如 `Genesis_20261115.txt`、`Worship_20261115.txt`）合在一起复查。几十秒到一两分钟后，`transcripts/review-20261115.txt` 会自动用 TextEdit 打开，Presenter 随后自己退出。
 
 报告有三部分：
 
@@ -318,7 +347,7 @@ Air 自己从 **Maono ProStudio 2x2 Lite**（和 OBS 同一个输入，互不影
   - 这个写法平时也会说（“哥哥他”“八十八”）→ 不要加到术语表，否则以后每次都会被改。不管它，或者只在讲那段经文的那周写进今日术语文件的第 3 列。
 
 **第 4 步：顺便扫一眼字幕记录本身**（可选）
-用 TextEdit 打开 `transcripts/transcript-20261115.txt`，按 ⌘F 搜关键的人名、地名，或者快速看几段 `原`/`译`：
+用 TextEdit 打开 `transcripts/` 里那天的字幕记录（如 `Worship_20261115.txt`），按 ⌘F 搜关键的人名、地名，或者快速看几段 `原`/`译`：
 
 | 字幕记录里看到 | 是什么问题 | `glossary-local.csv` 里怎么写 |
 |---|---|---|
@@ -418,7 +447,7 @@ cd ~/Presenter
 - `--at 10:16:50`：按真实时间表运行，但假装现在是 10:16:50（试 10:17 的提醒和延长；`--at 10:39:30 --caption` 试 10:40 字幕条出现）
 - `--date 20261101`：按某天的日期找 PDF（也按这个日期从 Google Drive 下载，周六晚上试明天的文件很方便）
 - `--nogdrive`：这次不从 Google Drive 下载，只用“下载”里已有的文件
-- `--review`：不投影，只复查最近一次的字幕记录（`--review 20261115` 复查某一天），见第五节“从字幕记录整理术语表”
+- `--review`：不投影，只复查最近一天的字幕记录（`--review 20261115` 复查某一天），见第五节“从字幕记录整理术语表”
 
 例：试字幕条 2 分钟 —— `./presenter.sh test --caption --pdftime 120`
 
@@ -457,6 +486,18 @@ cd ~/Presenter
 用翻页笔（多数发送 PageDown/PageUp）：在 `next` 里加 `"pagedown"`，`prev` 里加 `"pageup"`。
 macOS 15 起不允许只用 Option（⌥）或 Option+Shift 的全局快捷键，组合里请带上 ctrl 或 cmd。
 
+**快捷键使用统计**（`config.json` 的 `hotkeyStats`，默认 `true`）：
+- 每按一次快捷键，在 Presenter 文件夹的 `hotkey-usage.csv` 里记一行：`date,time,action,key,name,mode`（`mode`：`live` 正式 / `test` 测试模式）。所有日子都在这一个文件里，可以用 Excel / Numbers 打开做透视表，看不同时段各快捷键的使用频率。只记快捷键，菜单里点的不算。
+- Presenter 退出前（到 `quit` 时间、按 `⌃⌥Esc`、菜单退出都算），在 `presenter.log` 里写当天的报告：每 5 分钟一格（只列按过的格），每列一个动作，再加总计；下面是动作名的中文说明和各按键的次数。同一天重开过 Presenter 的话，报告是全天累计；测试模式只统计测试模式的按键。
+  ```
+  ===== 快捷键使用报告 2026-11-22（共 8 次，每 5 分钟一格）=====
+  time         total  next  prev  extend  caption  quit
+  09:15-09:20      3     2     1       -        -     -
+  10:30-10:35      2     -     -       2        -     -
+  ...
+  total            8     3     1       2        1     1
+  ```
+
 ## 九、修改内容
 
 - **先复制一份**：`cp stage.html stage-local.html`，以后只改 `stage-local.html`（不放进仓库，升级不会被覆盖；有它时 Presenter 用它，没有才用通用的 `stage.html`）。
@@ -491,10 +532,11 @@ macOS 15 起不允许只用 Option（⌥）或 Option+Shift 的全局快捷键�
 | `autostart.sh` | 旧入口，等于 `presenter.sh autostart` |
 | `rclone` | 从 Google Drive 下载用的工具（自己放进来） |
 | `gdrive-state.json` | 记录上次从 Google Drive 下载的版本（运行后生成，删掉也没关系） |
-| `presenter.log`、`cron.log` | 运行日志、自动启动记录（运行后生成） |
+| `presenter.log`、`cron.log` | 运行日志（退出前写当天的快捷键使用报告）、自动启动记录（运行后生成） |
+| `hotkey-usage.csv` | 每次按快捷键的记录（日期、时间、动作、按键），统计不同时段的使用频率用（运行后生成） |
 | `caption-dump-*` | “保存网页结构和截图”生成的文件（调整实时翻译用） |
 | `glossary-local.csv` | 教会自己的术语表（教会名字、牧者同工、团契事工；优先级最高；不放进仓库，升级时不要覆盖） |
 | `glossary-bible.csv` | 圣经术语表：圣经书卷、人名、地名、教会用语、神学用语（升级时可以覆盖） |
 | `glossary.csv` | 一般术语表：与圣经和本教会无关的词，如本地地名（优先级最低；升级时可以覆盖） |
 | `terms-yyyymmdd.csv` | 当天的今日术语（可选；也可以放在“下载”里或 Google Drive） |
-| `transcripts/` | 本机识别的字幕记录 `transcript-日期.txt` 和复查报告 `review-日期.txt`（运行后生成） |
+| `transcripts/` | 本机识别的字幕记录（按时段分文件，如 `Genesis_日期.txt`、`Worship_日期.txt`、`transcript_日期_小时.txt`）和复查报告 `review-日期.txt`（运行后生成） |
