@@ -29,6 +29,7 @@ cd ~/GitRepos/Presenter
 ./build.sh --release        # 编译 + 发布到 GitHub 的 release 分支，直播电脑运行 ./presenter.sh update 就能更新
 ```
 - `--release` 要求源代码已提交（发布的每个版本都写明对应的源代码版本 `main@提交号`），记得也 `git push` main。
+- 版本号写成 `2.5 (8)`：`VERSION`（2.5）在 `build.sh` 开头手动改；`BUILD`（8）自动算：读上一个发布版本的说明“Presenter 2.5 (7) · 源代码 main@956c250”，源代码提交号变了就 +1，没变就不变；`VERSION` 改了从 1 开始。编译时第一行会写明这次是几号、为什么。
 - release 分支只保留最近 10 个版本（`KEEP_RELEASES=20 ./build.sh --release` 可以改），所以仓库不会越来越大。
   要更早的版本：`git checkout <提交号>` 切到那个源代码版本，重新 `./build.sh` 即可。
 - 发布和打包的内容只有：`Presenter.app`、`config.json`、`config-local.example.json`、`stage.html`、两个通用术语表、`presenter.sh`、说明文档。

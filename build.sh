@@ -7,12 +7,13 @@
 #                              直播电脑上运行 ./presenter.sh update 就能更新
 #   ./build.sh --release --no-push   只在本地生成 release 提交，不推送
 #   环境变量：KEEP_RELEASES=10（保留几个版本）、FORCE=1（有未提交的修改也发布）
+#   版本号：VERSION 手动改；BUILD 自动算（见下面），源代码提交号和上一个发布版本不同时自动 +1
 set -euo pipefail
 cd "$(dirname "$0")"
 HERE="$(pwd)"
 
 VERSION="2.5"
-BUILD="7"
+BUILD_START="7"     # 找不到上一个发布版本时用的 BUILD
 BRANCH="release"
 KEEP="${KEEP_RELEASES:-10}"
 
@@ -25,6 +26,32 @@ for a in "$@"; do
     *) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
   esac
 done
+
+# ---------- BUILD：从上一个发布版本的提交说明“Presenter 2.5 (7) · 源代码 main@956c250”算出来 ----------
+#   源代码提交号和上一个发布版本相同（且没有未提交的修改）→ BUILD 不变；不同 → +1；
+#   VERSION 改了 → 从 1 开始；找不到上一个发布版本 → BUILD_START
+[ "$RELEASE" = 1 ] && { git fetch -q origin "$BRANCH" 2>/dev/null || true; }
+LAST_REF="$(git rev-parse -q --verify "refs/remotes/origin/$BRANCH" || git rev-parse -q --verify "refs/heads/$BRANCH" || true)"
+LAST_MSG="$( [ -n "$LAST_REF" ] && git log -1 --format=%s "$LAST_REF" || true)"
+LAST_VER="$(printf '%s' "$LAST_MSG" | sed -n 's/^Presenter \([^ ]*\) (\([0-9]*\)) .*/\1/p')"
+LAST_BUILD="$(printf '%s' "$LAST_MSG" | sed -n 's/^Presenter \([^ ]*\) (\([0-9]*\)) .*/\2/p')"
+LAST_SRC="$(printf '%s' "$LAST_MSG" | sed -n 's/.*@\([0-9a-f]\{7,\}\).*/\1/p')"
+DIRTY="$(git status --porcelain --untracked-files=no)"
+SAME_SRC=0
+if [ -n "$LAST_SRC" ] && [ -z "$DIRTY" ] && \
+   [ "$(git rev-parse -q --verify "$LAST_SRC^{commit}" 2>/dev/null || true)" = "$(git rev-parse HEAD)" ]; then
+  SAME_SRC=1
+fi
+if [ -z "$LAST_BUILD" ]; then
+  BUILD="$BUILD_START"; WHY="找不到上一个发布版本，用 BUILD_START"
+elif [ "$LAST_VER" != "$VERSION" ]; then
+  BUILD=1; WHY="VERSION 从 ${LAST_VER} 改成 ${VERSION}，BUILD 从 1 开始"
+elif [ "$SAME_SRC" = 1 ]; then
+  BUILD="$LAST_BUILD"; WHY="源代码和上一个发布版本相同（@${LAST_SRC}）"
+else
+  BUILD=$((LAST_BUILD + 1)); WHY="上一个发布版本是 (${LAST_BUILD}) @${LAST_SRC}，源代码变了"
+fi
+echo "▶ 版本 ${VERSION} (${BUILD})：${WHY}"
 
 # 发布哪些文件（Presenter.app 之外）。这里没有的文件（*-local.*、rclone、凭证、日志、字幕记录）都不会发布或打包。
 RELEASE_FILES=(
