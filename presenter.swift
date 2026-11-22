@@ -212,6 +212,7 @@ struct AppleCaptionConfig {
     var autoPunctuation = "zh"          // 按停顿补标点：zh（只对普通话）| all | off
     var pauseComma: Double = 0.3        // 停顿几秒补逗号
     var pausePeriod: Double = 0.8       // 停顿几秒补句号
+    var backgroundTranscribe = true     // 启动时就打开“后台识别并记录”（⌃⌥M 随时开关）
 }
 
 struct GlossaryConfig {
@@ -3618,7 +3619,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
     var sentenceMode = true
     var highFidelity = true
     var transcriptHeaderPending = false
-    var backgroundTranscribe = false    // ⌃⌥M：本机识别在后台一直运行并记录（不管字幕来源、是否显示）
+    var backgroundTranscribe = false    // ⌃⌥M：本机识别在后台一直运行并记录（不管字幕来源、是否显示）；启动时按设置打开
+    var noBackgroundArg = false         // --nobackground：这次启动不打开后台识别
     let kaleoRecordMerger = SnapshotMerger()   // 记录用（和显示用的 kaleoMerger 分开）
     var kaleoPending = ""               // Kaleo 文字：还没写进文件的部分
     var kaleoPendingAt: Date?
@@ -3693,6 +3695,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
             problems.append("本机识别需要 macOS 26，并用 Xcode 26 编译；字幕来源已改用 Kaleo")
             captionSource = "kaleo"
         }
+        // 后台识别并记录：默认一启动就打开（caption.apple.backgroundTranscribe；--nobackground 这次不开）
+        backgroundTranscribe = cfg.caption.apple.backgroundTranscribe && !noBackgroundArg
+            && recognizer != nil && cfg.caption.apple.saveTranscript
 
         activity = ProcessInfo.processInfo.beginActivity(
             options: [.userInitiated, .idleDisplaySleepDisabled, .idleSystemSleepDisabled, .latencyCritical],
@@ -3783,6 +3788,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
             case "--review":
                 reviewMode = true
                 if i + 1 < args.count, !args[i + 1].hasPrefix("--") { reviewArg = value() }
+            case "--nobackground":
+                noBackgroundArg = true
             case "--apple":
                 captionSourceArg = "apple"
             case "--kaleo":
@@ -3916,6 +3923,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
                 if let v = a["autoPunctuation"] as? String, ["zh", "all", "off"].contains(v) { cfg.caption.apple.autoPunctuation = v }
                 if let v = a["pauseComma"] as? Double, v >= 0.1, v <= 3 { cfg.caption.apple.pauseComma = v }
                 if let v = a["pausePeriod"] as? Double, v >= 0.2, v <= 5 { cfg.caption.apple.pausePeriod = v }
+                if let v = a["backgroundTranscribe"] as? Bool { cfg.caption.apple.backgroundTranscribe = v }
             }
             if let v = c["marginPercent"] as? Double, v >= 0, v <= 30 { cfg.caption.marginPercent = v }
             if let v = c["textSelector"] as? String { cfg.caption.textSelector = v.trimmingCharacters(in: .whitespaces) }
@@ -6469,6 +6477,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
             lines.append("实时翻译：今天不自动显示（需要时按 \(t)）")
         }
         if captionSource == "apple" && cfg.glossary.enabled { lines.append(glossaryInfo) }
+        if backgroundTranscribe {
+            var s = "后台识别：✅ 开，本机识别结果记到 transcripts/" + (captionSource == "kaleo" ? "（Kaleo 文字另存 *_Kaleo.txt）" : "")
+            if let k = hotkeyLabels[.transcribe] { s += "　·　关闭：\(k)" }
+            lines.append(s)
+        }
         if captionToday && cfg.obs.enabled { lines.append(obsStatusText()) }
         if hotkeyProblems > 0 { lines.append("快捷键：⚠️ 有冲突，详见菜单栏图标") }
         for p in problems { lines.append("⚠️ \(p)") }
@@ -6837,6 +6850,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
             writeLog("字幕记录分文件：其他时间 → \(cfg.transcriptDefault).txt")
         }
         writeLog("快捷键统计：" + (cfg.hotkeyStats ? "记到 hotkey-usage.csv，退出前在日志里写报告" : "关"))
+        var bg = "后台识别并记录：" + (backgroundTranscribe ? "开（启动时自动打开）" : "关")
+        if !backgroundTranscribe && cfg.caption.apple.backgroundTranscribe {
+            bg += noBackgroundArg ? "（--nobackground）" : (recognizer == nil ? "（本机识别不可用）" : "（saveTranscript 是 false）")
+        }
+        writeLog(bg)
         writeLog("本机识别补标点：" + (cfg.caption.apple.autoPunctuation == "off" ? "关" :
                  "\(cfg.caption.apple.autoPunctuation == "all" ? "普通话和英语" : "普通话")，停顿 \(cfg.caption.apple.pauseComma) 秒补逗号、\(cfg.caption.apple.pausePeriod) 秒补句号"))
         writeLog("字幕左右留白 \(cfg.caption.marginPercent)%；" + (cfg.obs.enabled ? "OBS 字幕页 http://127.0.0.1:\(cfg.obs.port)/caption（\(cfg.obs.visibility == "auto" ? "字幕时段内一直显示" : "跟投影字幕条一起显示/隐藏")）" : "OBS 字幕叠加已关闭"))
