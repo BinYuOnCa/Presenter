@@ -47,6 +47,7 @@
 
   "_caption说明": "实时翻译字幕条。url：Kaleo 翻译网页（写在 config-local.json 里）。when：firstSunday（每月第一个星期天）、sunday（每个星期天）、always（每天）、never（只手动打开）。showDuring：哪些画面时显示；from/to：几点开始/停止自动显示（to 留空 = 到画面结束）。随时可按 ⌃⌥T 手动显示/隐藏。heightPercent：占投影高度的百分比。lines：显示几行。marginPercent：字幕左右各留白多少（占屏幕宽度的百分比）。字幕从左到右写，一行写满整行向上滚动。overlay：true = 叠加在 PDF 下部（PDF 保持全屏，做 PDF 时把这些页的下方 1/5 留白），false = PDF 缩到上方 4/5。background：颜色，或 transparent（透明，字直接显示在 PDF 留白处，带黑色描边）。mode：text（提取文字显示大字）或 page（直接显示原网页）。textSelector：一般留空（自动寻找），找得不准时填 CSS 选择器。",
   "_caption来源说明": "source：字幕来源，kaleo（Kaleo 网页）或 apple（本机识别 + 翻译），使用时可随时用 ⌃⌥S 或菜单切换。apple 里：language 识别语言 zh-CN（普通话）或 en-US（英语），用 ⌃⌥L 切换；translateTo：auto = 翻成另一种语言，none = 不翻译；inputDevice：音频输入设备名字（包含即可，留空 = 系统默认输入）；channel：0 = 混合所有输入，1 / 2 = 只用第 1 / 2 路输入；display：both（上面一行原文、下面译文）、translation（只显示译文）、original（只显示原文）；clearAfterSeconds：多少秒没人说话就清空字幕。",
+  "_caption后台识别说明": "backgroundTranscribe：true = Presenter 一启动就打开“后台识别并记录”：本机识别一直在后台运行，结果写进 transcripts 文件夹，不管实时翻译显示没显示、字幕来源是哪个；字幕来源是 Kaleo 时，Kaleo 网页的文字另存同名 *_Kaleo.txt。随时可按 ⌃⌥M 开关。false = 启动时不打开（需要时按 ⌃⌥M）。只是这次不开：启动参数 --nobackground。",
   "_caption补标点说明": "autoPunctuation：按讲员的停顿自动补标点，zh = 只对普通话（默认），all = 普通话和英语，off = 不补；pauseComma：停顿几秒补逗号；pausePeriod：停顿几秒补句号。讲得快、标点太少就把两个数调小一点（例如 0.25 / 0.6），标点太多就调大。",
   "_caption翻译质量说明": "sentenceMode：true = 整句翻译（一句说完再翻，更准，译文晚一两秒；⌃⌥J 随时切换）；sentenceMaxSeconds：整句翻译最多等几秒；sentencePauseSeconds：停顿几秒算一句说完；translationQuality：high = 高保真（macOS 26.4 起，Apple Intelligence 打开时用它的模型，否则自动用普通模型），fast = 普通模型；saveTranscript：把识别和翻译存到 Presenter 文件夹的 transcripts 文件夹（复查、补充术语表用；文件名按下面 transcripts 的时段规则）。",
   "caption": {
@@ -65,7 +66,8 @@
       "saveTranscript": true,
       "autoPunctuation": "zh",
       "pauseComma": 0.3,
-      "pausePeriod": 0.8
+      "pausePeriod": 0.8,
+      "backgroundTranscribe": true
     },
     "when": "firstSunday",
     "showDuring": ["pdf2"],
@@ -139,6 +141,7 @@
     "showTranslation": ["ctrl+alt+y"],
     "showBoth":     ["ctrl+alt+a"],
     "sentenceMode": ["ctrl+alt+j"],
+    "transcribe":   ["ctrl+alt+m"],
     "pdfNow":       ["ctrl+alt+p"],
     "welcomeNow":   [],
     "clockNow":     [],

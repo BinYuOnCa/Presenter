@@ -287,6 +287,7 @@ Presenter 运行时在本机提供字幕网页 `http://127.0.0.1:8765/caption`�
 | 本机识别 | 只显示译文 | `⌃⌥Y` |
 | 本机识别 | 只显示原文 | `⌃⌥O` |
 | 本机识别 | 整句翻译开/关 | `⌃⌥J` |
+| 本机识别 | 后台识别并记录 开/关（默认启动就开；不管字幕来源、是否显示；字幕来源是 Kaleo 时 Kaleo 文字另存 `*_Kaleo.txt`） | `⌃⌥M` |
 | 程序 | 退出 Presenter | `⌃⌥Esc` |
 
 - 启动时会读取 OBS 的快捷键设置；和 OBS 或其他软件冲突的组合不会启用，菜单栏标 ⚠️，菜单 › 快捷键 里可以看到哪个没启用。
@@ -407,6 +408,7 @@ Presenter 运行时在本机提供字幕网页 `http://127.0.0.1:8765/caption`�
 | `--nogdrive` | 这次不从 Google Drive 下载 |
 | `--caption` / `--nocaption` | 不管哪天都显示 / 不显示实时翻译 |
 | `--apple` / `--kaleo` | 这次用本机识别 / Kaleo 作字幕来源 |
+| `--nobackground` | 这次启动不打开后台识别 |
 | `--input "MacBook"` | 这次用哪个音频输入（名字包含即可；`""` = 系统默认） |
 | `--channel 1` | 只用第 1 路输入（0 = 混合） |
 | `--lang en` | 这次识别英语（`zh` = 普通话） |
@@ -450,6 +452,7 @@ Presenter 运行时在本机提供字幕网页 `http://127.0.0.1:8765/caption`�
 | `caption.apple.sentenceMode` / `sentenceMaxSeconds` / `sentencePauseSeconds` | `true` / 7 / 1.2 | 整句翻译、最多等几秒、停顿几秒算一句 |
 | `caption.apple.translationQuality` | `high` | `high` = 高保真，`fast` = 快速 |
 | `caption.apple.saveTranscript` | `true` | 保存字幕记录到 `transcripts/` |
+| `caption.apple.backgroundTranscribe` | `true` | 启动时就打开后台识别并记录（`⌃⌥M` 随时开关） |
 | `transcripts.files` / `default` | 星期天 9:15–10:25 `{pdf1}_{date}`、10:30–12:10 `Worship_{date}` / `transcript_{date}_{hour}` | 字幕记录按时段分文件：`days`（sun…sat，不写 = 每天）、`from`、`to`（不含）、`name`；都不符合用 `default` |
 | `hotkeyStats` | `true` | 快捷键使用记到 `hotkey-usage.csv`，退出前在日志里写报告 |
 | `caption.apple.autoPunctuation` / `pauseComma` / `pausePeriod` | `zh` / 0.3 / 0.8 | 按停顿补标点：`zh` 只对普通话 / `all` / `off`；停顿几秒补逗号、句号 |
@@ -486,6 +489,7 @@ Presenter 运行时在本机提供字幕网页 `http://127.0.0.1:8765/caption`�
 | `rclone` | 从 Google Drive 下载用的工具 | 不动 |
 | `pdf/sample.pdf` | 只在测试模式使用 | 自动更新 |
 | `transcripts/书卷名_日期.txt`、`Worship_日期.txt`、`transcript_日期_小时.txt` | 本机识别的字幕记录（按时段分文件，见 `transcripts` 设置） | 自动生成 |
+| `transcripts/*_Kaleo.txt` | 后台识别（`⌃⌥M`）时，同一时段 Kaleo 网页的文字 | 自动生成 |
 | `transcripts/review-日期.txt` | 字幕复查报告 | 自动生成 |
 | `presenter.log` | 运行日志（菜单 › 工具 › 查看日志）；退出前写当天的快捷键使用报告 | 自动生成 |
 | `hotkey-usage.csv` | 每次按快捷键的记录（统计使用频率用） | 自动生成 |
