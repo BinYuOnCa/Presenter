@@ -139,6 +139,7 @@
     "showTranslation": ["ctrl+alt+y"],
     "showBoth":     ["ctrl+alt+a"],
     "sentenceMode": ["ctrl+alt+j"],
+    "transcribe":   ["ctrl+alt+m"],
     "pdfNow":       ["ctrl+alt+p"],
     "welcomeNow":   [],
     "clockNow":     [],

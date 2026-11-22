@@ -287,6 +287,7 @@ Presenter 运行时在本机提供字幕网页 `http://127.0.0.1:8765/caption`�
 | 本机识别 | 只显示译文 | `⌃⌥Y` |
 | 本机识别 | 只显示原文 | `⌃⌥O` |
 | 本机识别 | 整句翻译开/关 | `⌃⌥J` |
+| 本机识别 | 后台识别并记录 开/关（不管字幕来源、是否显示；字幕来源是 Kaleo 时 Kaleo 文字另存 `*_Kaleo.txt`） | `⌃⌥M` |
 | 程序 | 退出 Presenter | `⌃⌥Esc` |
 
 - 启动时会读取 OBS 的快捷键设置；和 OBS 或其他软件冲突的组合不会启用，菜单栏标 ⚠️，菜单 › 快捷键 里可以看到哪个没启用。
@@ -486,6 +487,7 @@ Presenter 运行时在本机提供字幕网页 `http://127.0.0.1:8765/caption`�
 | `rclone` | 从 Google Drive 下载用的工具 | 不动 |
 | `pdf/sample.pdf` | 只在测试模式使用 | 自动更新 |
 | `transcripts/书卷名_日期.txt`、`Worship_日期.txt`、`transcript_日期_小时.txt` | 本机识别的字幕记录（按时段分文件，见 `transcripts` 设置） | 自动生成 |
+| `transcripts/*_Kaleo.txt` | 后台识别（`⌃⌥M`）时，同一时段 Kaleo 网页的文字 | 自动生成 |
 | `transcripts/review-日期.txt` | 字幕复查报告 | 自动生成 |
 | `presenter.log` | 运行日志（菜单 › 工具 › 查看日志）；退出前写当天的快捷键使用报告 | 自动生成 |
 | `hotkey-usage.csv` | 每次按快捷键的记录（统计使用频率用） | 自动生成 |

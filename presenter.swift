@@ -167,6 +167,7 @@ let defaultHotkeys: [String: [String]] = [
     "showTranslation": ["ctrl+alt+y"],
     "showBoth": ["ctrl+alt+a"],
     "sentenceMode": ["ctrl+alt+j"],
+    "transcribe": ["ctrl+alt+m"],
     "pdfNow": ["ctrl+alt+p"],
     "quit": ["ctrl+alt+escape"],
 ]
@@ -700,7 +701,7 @@ struct CachedDoc {
 
 enum HotAction: String, CaseIterable {
     case next, prev, first, last, black, extend, auto, caption, captionSource, captionLanguage
-    case showOriginal, showTranslation, showBoth, sentenceMode
+    case showOriginal, showTranslation, showBoth, sentenceMode, transcribe
     case pdfNow, welcomeNow, clockNow, countdownNow, quit
 
     var title: String {
@@ -719,6 +720,7 @@ enum HotAction: String, CaseIterable {
         case .showTranslation: return "本机识别 只显示译文"
         case .showBoth: return "本机识别 原文 + 译文"
         case .sentenceMode: return "本机识别 整句翻译 开/关"
+        case .transcribe: return "后台识别并记录 开/关（不管字幕来源和是否显示）"
         case .pdfNow: return "立即显示 PDF（当前或下一个）"
         case .welcomeNow: return "立即显示欢迎页"
         case .clockNow: return "立即显示时钟"
@@ -3616,6 +3618,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
     var sentenceMode = true
     var highFidelity = true
     var transcriptHeaderPending = false
+    var backgroundTranscribe = false    // ⌃⌥M：本机识别在后台一直运行并记录（不管字幕来源、是否显示）
+    let kaleoRecordMerger = SnapshotMerger()   // 记录用（和显示用的 kaleoMerger 分开）
+    var kaleoPending = ""               // Kaleo 文字：还没写进文件的部分
+    var kaleoPendingAt: Date?
+    var kaleoTail = ""                  // Kaleo 网页最后几十个字（还可能改），停止时一起写进去
+    var lastKaleoURL: URL?
     var transcriptRules: [TranscriptRule] = []
     var transcriptBookNames: [String: String] = [:]   // "日期|pdf1" → 书卷名（同一天固定下来，免得中途换文件）
     var lastTranscriptURL: URL?
@@ -3729,6 +3737,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
 
     func applicationWillTerminate(_ notification: Notification) {
         applicationWillTerminateHotkeyReport()
+        flushKaleo(final: true)
         recognizer?.stop()
         captionServer?.stop()
         hotKeys.unregisterAll()
@@ -4435,7 +4444,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
     @objc func didWake(_ note: Notification) {
         writeLog("系统唤醒")
         if sourceRequested && captionSource == "kaleo" { loadSource("系统唤醒后重新载入") }
-        if let r = recognizer, r.running, captionSource == "apple" { startRecognizer("系统唤醒后重新开始") }
+        if let r = recognizer, r.running, captionSource == "apple" || backgroundTranscribe { startRecognizer("系统唤醒后重新开始") }
         tick()
     }
 
@@ -5078,10 +5087,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         let needed = captionNeededSoon(now)
         if captionSource == "apple" {
             guard let r = recognizer else { return }
-            if needed {
+            if needed || backgroundTranscribe {
                 if !r.running {
                     if let retry = r.retryAt, Date() < retry { return }
-                    startRecognizer("开始")
+                    startRecognizer(needed ? "开始" : "后台识别")
                 }
                 r.clearIfIdle(after: cfg.caption.apple.clearAfterSeconds)
             } else if r.running {
@@ -5090,8 +5099,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
             }
             return
         }
-        if let r = recognizer, r.running { r.stop() }
-        guard needed else { return }
+        // 字幕来源是 Kaleo：后台识别开着时，本机识别照样在后台运行（只记录，不显示），Kaleo 网页也一直载入
+        if let r = recognizer {
+            if backgroundTranscribe {
+                if !r.running, r.retryAt.map({ Date() >= $0 }) ?? true { startRecognizer("后台识别") }
+                r.clearIfIdle(after: cfg.caption.apple.clearAfterSeconds)
+            } else if r.running {
+                r.stop()
+            }
+        }
+        if let at = kaleoPendingAt, now.timeIntervalSince(at) > 20 { flushKaleo() }
+        guard needed || backgroundTranscribe else { return }
         if !sourceRequested {
             loadSource("开始载入")
         } else if let r = sourceRetryAt, now >= r {
@@ -5129,6 +5147,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
                     captionActivity = appNow()
                 }
                 kaleoCaption(t)
+                recordKaleo(t)
             }
         } else if type == "status" {
             let path = (body["path"] as? String) ?? ""
@@ -5300,8 +5319,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         guard let r = recognizer else { return }
         appleOriginal = ""
         appleTranslation = ""
-        captionFeed.reset()
-        refreshCaptionDisplay()
+        if captionSource == "apple" {       // 字幕来源是 Kaleo 时只在后台记录，不动正在显示的 Kaleo 字幕
+            captionFeed.reset()
+            refreshCaptionDisplay()
+        }
         writeLog("本机识别：\(why)（\(languageName(appleLanguage))，输入 \(cfg.caption.apple.inputDevice)）")
         transcriptHeaderPending = true
         r.start(language: appleLanguage, target: appleTargetFor(appleLanguage),
@@ -5328,8 +5349,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         captionFeed.reset()
         kaleoMerger.reset()
         if src == "kaleo" {
-            recognizer?.stop()
+            if !backgroundTranscribe { recognizer?.stop() }
+            kaleoRecordMerger.reset()
+            kaleoTail = ""
             if !captionText.isEmpty { kaleoCaption(captionText) }
+        } else {
+            flushKaleo(final: true)
         }
         layoutContent()
         refreshCaptionDisplay()
@@ -5696,6 +5721,76 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         appendTranscript(transcriptBlock(r), to: url)
     }
 
+    // MARK: 后台识别并记录（⌃⌥M）
+
+    /// 开：本机识别一直在后台运行，识别结果照常写进字幕记录；字幕来源是 Kaleo 时，Kaleo 网页的文字也记进 *_Kaleo.txt。
+    /// 不管实时翻译显示没显示、字幕来源是哪个。关：恢复原来的做法（只在要显示本机识别字幕时识别）
+    func setBackgroundTranscribe(_ on: Bool) {
+        if on && recognizer == nil {
+            infoHUD.show("后台识别不可用：\(appleStatus)", on: builtInScreen(), seconds: 5)
+            return
+        }
+        if on && !cfg.caption.apple.saveTranscript {
+            infoHUD.show("后台识别：config.json 的 caption.apple.saveTranscript 是 false，识别结果不会保存", on: builtInScreen(), seconds: 6)
+        }
+        backgroundTranscribe = on
+        var msg = "后台识别并记录：" + (on ? "开" : "关")
+        if on {
+            msg += captionSource == "kaleo" ? "\n本机识别记到 transcripts/，Kaleo 文字记到 *_Kaleo.txt" : "\n本机识别记到 transcripts/"
+        } else {
+            flushKaleo(final: true)
+        }
+        if let k = hotkeyLabels[.transcribe] { msg += "\n再按 \(k) " + (on ? "关闭" : "打开") }
+        writeLog(msg.replacingOccurrences(of: "\n", with: "；"))
+        infoHUD.show(msg, on: builtInScreen(), seconds: 4)
+        if recognizer?.running == true { transcriptHeaderPending = true }
+        captionTick(appNow())
+    }
+
+    /// Kaleo 的字幕记录文件：和本机识别同名，后面加 _Kaleo（例如 Worship_20261122_Kaleo.txt）
+    func kaleoTranscriptURL(for d: Date) -> URL {
+        let u = transcriptURL(for: d)
+        let base = u.deletingPathExtension().lastPathComponent
+        return u.deletingLastPathComponent().appendingPathComponent(base + "_Kaleo.txt")
+    }
+
+    /// Kaleo 网页的最新文字（滑动窗口）→ 定下来的部分攒起来，一句说完或攒多了再写进文件
+    func recordKaleo(_ snap: String) {
+        guard backgroundTranscribe, captionSource == "kaleo", cfg.caption.apple.saveTranscript else { return }
+        let m = kaleoRecordMerger.merge(snap)
+        kaleoTail = m.tail
+        guard !m.append.isEmpty else { return }
+        if kaleoPending.isEmpty { kaleoPendingAt = appNow() }
+        kaleoPending += m.append
+        let t = kaleoPending.trimmingCharacters(in: .whitespaces)
+        if t.count >= 300 || (t.count >= 60 && ".?!。？！".contains(t.last ?? " ")) { flushKaleo() }
+    }
+
+    /// 把攒着的 Kaleo 文字写进文件；final = 停止记录时，连最后还可能改的几十个字也写进去
+    func flushKaleo(final: Bool = false) {
+        var text = kaleoPending
+        if final {
+            text += kaleoTail
+            kaleoTail = ""
+            kaleoRecordMerger.reset()
+        }
+        let at = kaleoPendingAt ?? appNow()
+        kaleoPending = ""
+        kaleoPendingAt = nil
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty, cfg.caption.apple.saveTranscript else { return }
+        let url = kaleoTranscriptURL(for: at)
+        if url != lastKaleoURL {
+            lastKaleoURL = url
+            writeLog("Kaleo 文字记录写入 transcripts/\(url.lastPathComponent)")
+            let f = DateFormatter()
+            f.locale = Locale(identifier: "en_US_POSIX")
+            f.dateFormat = "yyyy-MM-dd HH:mm:ss"
+            appendTranscript("\n===== \(f.string(from: Date())) Kaleo 网页文字（后台识别时同时记录；本机识别的结果在同名不带 _Kaleo 的文件里）=====\n\n", to: url)
+        }
+        appendTranscript("[\(hms(at))]\nKaleo：\(t)\n\n", to: url)
+    }
+
     func transcriptHeader() -> String {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
@@ -5743,6 +5838,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         p.append("fuzzy=\(cfg.glossary.fuzzy)")
         p.append("fuzzyMinLength=\(cfg.glossary.fuzzyMinLength)")
         p.append("captionLines=\(cfg.caption.lines)")
+        p.append("background=\(backgroundTranscribe)")
         return "参数：" + p.joined(separator: "  ")
     }
 
@@ -5769,7 +5865,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         guard let names = try? fm.contentsOfDirectory(atPath: transcriptFolder.path),
               let re = try? NSRegularExpression(pattern: "(20[0-9]{6})", options: []) else { return [] }
         var out: [(url: URL, day: String, mod: Date)] = []
-        for n in names where n.lowercased().hasSuffix(".txt") && !n.hasPrefix("review-") && !n.hasPrefix(".") {
+        // *_Kaleo.txt 是 Kaleo 网页的文字，格式不同，不参加复查
+        for n in names where n.lowercased().hasSuffix(".txt") && !n.hasPrefix("review-") && !n.hasPrefix(".")
+            && !n.hasPrefix("asrtest-") && !n.hasSuffix("_Kaleo.txt") {
             let ns = n as NSString
             guard let m = re.firstMatch(in: n, options: [], range: NSRange(location: 0, length: ns.length)) else { continue }
             let u = transcriptFolder.appendingPathComponent(n)
@@ -6170,6 +6268,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         case .sentenceMode:
             setSentenceMode(!sentenceMode)
             return
+        case .transcribe:
+            setBackgroundTranscribe(!backgroundTranscribe)
+            return
         case .captionLanguage:
             if captionSource != "apple" {
                 infoHUD.show("现在的字幕来源是 Kaleo；先按 \(hotkeyLabels[.captionSource] ?? "菜单") 切换到本机识别", on: builtInScreen(), seconds: 4)
@@ -6505,6 +6606,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         addAction(cm, .showTranslation, "显示：只显示译文", #selector(menuAppleTranslation), on: appleDisplay == "translation")
         addAction(cm, .showOriginal, "显示：只显示原文", #selector(menuAppleOriginal), on: appleDisplay == "original")
         addAction(cm, .sentenceMode, "整句翻译（一句说完再翻，更准）", #selector(menuSentenceToggle), on: sentenceMode)
+        addAction(cm, .transcribe, "后台识别并记录（不管字幕来源和是否显示）", #selector(menuTranscribeToggle), on: backgroundTranscribe)
         addAction(cm, nil, "翻译质量：高保真（Apple Intelligence 可用时）", #selector(menuQualityHigh), on: highFidelity)
         addAction(cm, nil, "翻译质量：快速", #selector(menuQualityFast), on: !highFidelity)
         if let st = recognizer?.translationStats, !st.isEmpty { addInfo(cm, st) }
@@ -6587,6 +6689,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
     @objc func menuAuto() { run(.auto) }
     @objc func menuBlack() { run(.black) }
     @objc func menuCaptionToggle() { run(.caption) }
+    @objc func menuTranscribeToggle() { setBackgroundTranscribe(!backgroundTranscribe) }
     @objc func menuSourceKaleo() { setCaptionSource("kaleo") }
     @objc func menuSourceApple() { setCaptionSource("apple") }
     @objc func menuSourceToggle() { run(.captionSource) }

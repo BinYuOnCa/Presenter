@@ -311,7 +311,19 @@ Air 自己从 **Maono ProStudio 2x2 Lite**（和 OBS 同一个输入，互不影
 参数：source=apple  language=zh-CN  translateTo=auto  display=both  inputDevice="Maono ProStudio 2x2 Lite"  channel=0  clearAfterSeconds=15  sentenceMode=true  sentenceMaxSeconds=7  sentencePauseSeconds=1.2  translationQuality=high  autoPunctuation=zh  pauseComma=0.3  pausePeriod=0.8  glossary=true  beforeTranslation=true  fuzzy=today  fuzzyMinLength=3  captionLines=3
 ```
 参数名和 `config.json` 的 `caption.apple` / `glossary` 里一样，方便以后对照不同讲员的语速调整（例如某位讲员讲得快、标点太少，就把那天的 `pauseComma` / `pausePeriod` 调小再比较）。
-开始识别、换语言、切换整句翻译 / 翻译质量 / 显示方式、术语表重新载入时都会再写一段；换到另一个文件时，新文件开头也会写，每个文件都能单独复查。
+开始识别、换语言、切换整句翻译 / 翻译质量 / 显示方式、术语表重新载入、开关后台识别时都会再写一段；换到另一个文件时，新文件开头也会写，每个文件都能单独复查。
+
+**后台识别并记录（`⌃⌥M`，菜单 › 实时翻译 里也能开关）**
+平时本机识别只在要显示本机识别字幕时才运行。按 `⌃⌥M` 后，本机识别一直在后台运行，结果照常写进上面的字幕记录，**不管实时翻译显示没显示、字幕来源是哪个**；再按一次关闭。
+- 字幕来源是 Kaleo 时，投影和 OBS 上照样显示 Kaleo 的字幕；Kaleo 网页也一直保持载入，它的文字另存一个文件，文件名后面加 `_Kaleo`，例如 `Worship_20261122.txt`（本机识别）和 `Worship_20261122_Kaleo.txt`（Kaleo），方便逐段对比两边的识别和翻译：
+  ```
+  [10:41:05]
+  Kaleo：Today we look at the story of Elisha. He followed Elijah...
+  ```
+  Kaleo 的文字一句说完（或攒到 300 字、或 20 秒）写一段；停止后台识别、切换字幕来源、退出 Presenter 时，把最后还没写的也写进去。
+- 字幕记录的 `参数：` 行会记 `source=kaleo … background=true`。
+- `*_Kaleo.txt` 不参加复查（格式不同）。
+- 只在 Presenter 运行期间有效，重开 Presenter 后是关的。
 
 #### 从字幕记录整理术语表：具体步骤（每个用本机识别的主日后，约 10–15 分钟）
 
@@ -469,6 +481,7 @@ cd ~/Presenter
 | 本机识别：只显示译文 | `⌃⌥Y`（译文） |
 | 本机识别：原文 + 译文 | `⌃⌥A`（All） |
 | 本机识别：整句翻译 开/关 | `⌃⌥J`（句） |
+| 后台识别并记录 开/关（不管字幕来源、是否显示） | `⌃⌥M`（Mic） |
 | 黑屏开/关 | `⌃⌥B` |
 | 立即显示 PDF（当前时段的，或下一个） | `⌃⌥P` |
 | 退出 Presenter | `⌃⌥Esc` |
@@ -539,4 +552,4 @@ macOS 15 起不允许只用 Option（⌥）或 Option+Shift 的全局快捷键�
 | `glossary-bible.csv` | 圣经术语表：圣经书卷、人名、地名、教会用语、神学用语（升级时可以覆盖） |
 | `glossary.csv` | 一般术语表：与圣经和本教会无关的词，如本地地名（优先级最低；升级时可以覆盖） |
 | `terms-yyyymmdd.csv` | 当天的今日术语（可选；也可以放在“下载”里或 Google Drive） |
-| `transcripts/` | 本机识别的字幕记录（按时段分文件，如 `Genesis_日期.txt`、`Worship_日期.txt`、`transcript_日期_小时.txt`）和复查报告 `review-日期.txt`（运行后生成） |
+| `transcripts/` | 本机识别的字幕记录（按时段分文件，如 `Genesis_日期.txt`、`Worship_日期.txt`、`transcript_日期_小时.txt`）、后台识别时 Kaleo 的文字 `*_Kaleo.txt`，和复查报告 `review-日期.txt`（运行后生成） |
