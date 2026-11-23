@@ -11,5 +11,10 @@
     "apple": {
       "inputDevice": "Maono ProStudio 2x2 Lite"
     }
+  },
+  "_upload说明": "上传记录到 Google Drive：url = Apps Script 网页应用网址（/exec 结尾）；token = 暗号，和脚本属性 TOKEN 一样。不上传就删掉这一项。设置步骤见 README“上传记录到 Google Drive”。",
+  "upload": {
+    "url": "https://script.google.com/macros/s/……/exec",
+    "token": ""
   }
 }

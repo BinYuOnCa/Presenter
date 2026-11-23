@@ -29,6 +29,7 @@ cd ~/GitRepos/Presenter
 ./build.sh --release        # 编译 + 发布到 GitHub 的 release 分支，直播电脑运行 ./presenter.sh update 就能更新
 ```
 - `--release` 要求源代码已提交（发布的每个版本都写明对应的源代码版本 `main@提交号`），记得也 `git push` main。
+- 版本号写成 `2.5 (8)`：`VERSION`（2.5）在 `build.sh` 开头手动改；`BUILD`（8）自动算：读上一个发布版本的说明“Presenter 2.5 (7) · 源代码 main@956c250”，源代码提交号变了就 +1，没变就不变；`VERSION` 改了从 1 开始。编译时第一行会写明这次是几号、为什么。
 - release 分支只保留最近 10 个版本（`KEEP_RELEASES=20 ./build.sh --release` 可以改），所以仓库不会越来越大。
   要更早的版本：`git checkout <提交号>` 切到那个源代码版本，重新 `./build.sh` 即可。
 - 发布和打包的内容只有：`Presenter.app`、`config.json`、`config-local.example.json`、`stage.html`、两个通用术语表、`presenter.sh`、说明文档。
@@ -147,6 +148,36 @@ Google Cloud 里的应用要设为“正式版”，否则 7 天后失效），�
 
 菜单栏图标随时显示状态：`⏱9:10`（等待）→ `👋欢迎页` → `📄3/12`（第 3 页 / 共 12 页）→ `🕐时钟` → `⏳1:23` → `📄1/20💬`（💬 = 正在显示实时翻译）。
 延长时会显示到几点，如 `📄12/12→10:20`。图标前出现 **⚠️** 表示有问题，点开菜单看原因。
+
+### 上传记录到 Google Drive（另一个专用文件夹）
+
+Presenter 退出前把 `transcripts/` 里的字幕记录和 `presenter.log` 上传到 Google Drive 的一个专用文件夹（**不是**放 PDF 的那个），在家里也能看、复查。
+接收端是你自己 Google 账号里的一个小 Apps Script（代码在 `tools/presenter-upload.gs`）：Air 上不存任何 Google 密码或密钥，只有一个“只能往这个文件夹写”的网址和暗号。泄露了别人最多能往文件夹里塞文件，不能读、不能删；在脚本属性里换个暗号就作废。
+
+**一次性设置（约 15 分钟）**
+1. Google Drive 新建文件夹（例如“Presenter 记录”），复制网址里 `folders/` 后面那一串（FOLDER_ID）。
+2. 终端运行 `openssl rand -hex 24`，得到暗号（TOKEN）。
+3. https://script.google.com › 新项目（改名 Presenter Upload），把 `tools/presenter-upload.gs` 的内容整个贴进 `Code.gs`，保存。
+4. ⚙️ 项目设置 › 脚本属性：加 `FOLDER_ID` 和 `TOKEN`。
+5. 部署 › 新建部署 › 网页应用：执行身份 **我**，谁可以访问 **任何人** › 部署 › 授权（“Google 尚未验证此应用” › 高级 › 转至 Presenter Upload（不安全）› 允许）。复制网页应用网址（`/exec` 结尾）。
+6. 测试（应返回 `{"ok":true,…}`，文件夹里出现 `test/hello.txt`）：
+   ```bash
+   URL='https://script.google.com/macros/s/…/exec'; TOKEN='你的暗号'
+   DATA=$(printf '你好，Presenter 上传测试' | base64)
+   curl -sL -H 'Content-Type: application/json' -d "{\"token\":\"$TOKEN\",\"folder\":\"test\",\"name\":\"hello.txt\",\"data\":\"$DATA\"}" "$URL"
+   ```
+7. 写进 `config-local.json`：`"upload": { "url": "网页应用网址", "token": "你的暗号" }`。
+
+改了脚本：部署 › 管理部署 › ✏️ › 版本选“新版本”（网址不变）。换暗号：改脚本属性 `TOKEN`，再改 `config-local.json`。
+
+**什么时候上传、传什么**
+- 退出前（到 quit 时间、`⌃⌥Esc`、菜单退出）：先把快捷键报告、Kaleo 最后几句等写完，再上传，屏幕上显示“正在上传…”，最多等 60 秒（`upload.quitWaitSeconds`），超时也照样退出。
+- 启动 60 秒后补传上次没传上的（例如退出时没网），以及上次退出后才写进日志的最后几行。
+- 随时手动：菜单 › 工具 › 上传记录到 Google Drive（菜单里也显示上次上传的结果）；Presenter 没运行时 `./presenter.sh upload`。
+- 传最近 30 天（`upload.sinceDays`）`transcripts/` 里的 `.txt`（本机识别、`_Kaleo`、`review-`、`asrtest-`），和 `presenter.log` 里每天的那部分（存成 `presenter-20261122.log`）。
+- Drive 里按日期分文件夹，后面加这台电脑的名字：`2026-11-22 MacBook Air/Worship_20261122.txt`（`upload.label` 可改，`""` = 不加；测试模式再加“测试”）。
+- 内容没变的不重复上传（记在 `upload-state.json`，删掉它就全部重传一遍）；同名旧版本进 Drive 回收站。
+- 没网、出错只记日志和菜单，不影响投影和字幕。日志里只写 `script.google.com`，不写网址和暗号。
 
 ## 四、延长当前画面（例如 pdf1 那段超时）
 
@@ -464,6 +495,7 @@ cd ~/Presenter
 - `--date 20261101`：按某天的日期找 PDF（也按这个日期从 Google Drive 下载，周六晚上试明天的文件很方便）
 - `--nogdrive`：这次不从 Google Drive 下载，只用“下载”里已有的文件
 - `--review`：不投影，只复查最近一天的字幕记录（`--review 20261115` 复查某一天），见第五节“从字幕记录整理术语表”
+- `--upload`：不投影，只把字幕记录和日志上传到 Google Drive，传完退出（`./presenter.sh upload`），见第三节“上传记录到 Google Drive”
 
 例：试字幕条 2 分钟 —— `./presenter.sh test --caption --pdftime 120`
 
@@ -551,6 +583,8 @@ macOS 15 起不允许只用 Option（⌥）或 Option+Shift 的全局快捷键�
 | `gdrive-state.json` | 记录上次从 Google Drive 下载的版本（运行后生成，删掉也没关系） |
 | `presenter.log`、`cron.log` | 运行日志（退出前写当天的快捷键使用报告）、自动启动记录（运行后生成） |
 | `hotkey-usage.csv` | 每次按快捷键的记录（日期、时间、动作、按键），统计不同时段的使用频率用（运行后生成） |
+| `upload-state.json` | 哪些记录已经上传到 Google Drive（运行后生成；删掉 = 下次全部重传） |
+| `tools/presenter-upload.gs` | 上传接收端的 Apps Script 代码（贴到 script.google.com，见第三节） |
 | `caption-dump-*` | “保存网页结构和截图”生成的文件（调整实时翻译用） |
 | `glossary-local.csv` | 教会自己的术语表（教会名字、牧者同工、团契事工；优先级最高；不放进仓库，升级时不要覆盖） |
 | `glossary-bible.csv` | 圣经术语表：圣经书卷、人名、地名、教会用语、神学用语（升级时可以覆盖） |
