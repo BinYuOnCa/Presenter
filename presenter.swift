@@ -24,6 +24,7 @@ import PDFKit
 import Carbon
 import NaturalLanguage
 import Network
+import CryptoKit
 #if compiler(>=6.2)
 import Speech
 import Translation
@@ -304,6 +305,7 @@ struct PresenterConfig {
     var gdrive = GDriveConfig()
     var glossary = GlossaryConfig()
     var obs = OBSCaptionConfig()
+    var upload = UploadConfig()
 }
 
 enum Scene: Equatable {
@@ -690,6 +692,121 @@ func runGDriveJob(_ job: GDriveJob) -> [GDriveOutcome] {
         outcomes.append(GDriveOutcome(key: key, ok: true, downloaded: true, record: rec, message: msg))
     }
     return outcomes
+}
+
+// MARK: - 上传记录到 Google Drive（Apps Script 网页应用接收，见 tools/presenter-upload.gs）
+
+struct UploadConfig {
+    var enabled = true
+    var url = ""                        // Apps Script 网页应用网址（写在 config-local.json）
+    var token = ""                      // 暗号，和脚本属性 TOKEN 一样（写在 config-local.json）
+    var onQuit = true                   // 退出前上传
+    var onLaunch = true                 // 启动后补传上次没传上的
+    var quitWaitSeconds: Double = 60    // 退出前最多等几秒
+    var launchDelaySeconds: Double = 60 // 启动后多久补传
+    var sinceDays = 30                  // 只传最近几天的文件
+    var label: String?                  // Drive 里日期文件夹后面加的名字；nil = 这台电脑的名字，"" = 不加
+}
+
+/// 要上传的一个文件：key = 本机上的标识（记在 upload-state.json 里）；folder / name = Drive 里的子文件夹和文件名
+struct UploadItem {
+    let key: String
+    let folder: String
+    let name: String
+    let data: Data
+}
+
+struct UploadOutcome {
+    var uploaded: [String] = []
+    var unchanged = 0
+    var failed: [(name: String, error: String)] = []
+    var notTried = 0                    // 时间到了，没来得及传的
+    var state: [String: String] = [:]   // key → 已上传内容的 SHA-256
+}
+
+func sha256Hex(_ d: Data) -> String {
+    return SHA256.hash(data: d).map { String(format: "%02x", $0) }.joined()
+}
+
+/// 逐个文件 POST 给 Apps Script（在后台线程运行）：内容和上次上传的一样就跳过；到 deadline 就停
+func runUpload(url: URL, token: String, items: [UploadItem], known: [String: String], deadline: Date) -> UploadOutcome {
+    var out = UploadOutcome()
+    out.state = known
+    let conf = URLSessionConfiguration.ephemeral
+    conf.timeoutIntervalForRequest = 30
+    conf.timeoutIntervalForResource = 90
+    let session = URLSession(configuration: conf)
+    defer { session.finishTasksAndInvalidate() }
+    for (i, it) in items.enumerated() {
+        let sum = sha256Hex(it.data)
+        if known[it.key] == sum {
+            out.unchanged += 1
+            continue
+        }
+        if Date() >= deadline {
+            out.notTried = items.count - i
+            break
+        }
+        let body: [String: Any] = ["token": token, "folder": it.folder, "name": it.name, "data": it.data.base64EncodedString()]
+        guard let json = try? JSONSerialization.data(withJSONObject: body, options: []) else { continue }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = json
+        // Apps Script 处理完 POST 后用 302 把结果放到另一个网址，URLSession 会自动跟过去取（改用 GET）
+        let sem = DispatchSemaphore(value: 0)
+        var respData: Data?
+        var respErr: Error?
+        var status = 0
+        session.dataTask(with: req) { d, r, e in
+            respData = d
+            respErr = e
+            status = (r as? HTTPURLResponse)?.statusCode ?? 0
+            sem.signal()
+        }.resume()
+        sem.wait()
+        var err: String?
+        if let e = respErr {
+            err = e.localizedDescription
+        } else if let d = respData, let obj = (try? JSONSerialization.jsonObject(with: d, options: [])) as? [String: Any] {
+            if obj["ok"] as? Bool != true {
+                let e = (obj["error"] as? String) ?? "未知错误"
+                err = e == "bad token" ? "暗号不对（config-local.json 的 upload.token 和脚本属性 TOKEN 要一样）" : e
+            }
+        } else {
+            err = "返回的不是 JSON（HTTP \(status)；部署网页应用时“谁可以访问”要选“任何人”，网址要用 /exec 结尾的那个）"
+        }
+        if let e = err {
+            out.failed.append((it.name, e))
+            writeLog("⚠️ 上传 \(it.folder)/\(it.name) 失败：\(e)")
+            // 暗号或部署设置错了，后面的也一定失败：不再试
+            if e.hasPrefix("暗号不对") || e.hasPrefix("返回的不是 JSON") {
+                out.notTried = items.count - i - 1
+                break
+            }
+        } else {
+            out.uploaded.append(it.name)
+            out.state[it.key] = sum
+        }
+    }
+    return out
+}
+
+/// presenter.log 按日期切开：每行开头是 [yyyy-MM-dd …]，没有日期的行（多行的报告）跟着上一行
+func splitLogByDay(_ text: String) -> [(day: String, text: String)] {
+    var order: [String] = []
+    var parts: [String: [Substring]] = [:]
+    var cur: String?
+    for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+        if line.count >= 11, line.hasPrefix("["), line.dropFirst().prefix(10).allSatisfy({ $0.isNumber || $0 == "-" }) {
+            let day = String(line.dropFirst().prefix(10))
+            if day.filter({ $0 == "-" }).count == 2 { cur = day }
+        }
+        guard let d = cur else { continue }
+        if parts[d] == nil { order.append(d) }
+        parts[d, default: []].append(line)
+    }
+    return order.map { d in (d, parts[d]!.joined(separator: "\n") + "\n") }
 }
 
 struct CachedDoc {
@@ -3632,6 +3749,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
     var hotkeyCombos: [UInt32: String] = [:]          // 快捷键编号 → ⌃⌥→ 这样的显示名
     var hotkeyDaysSeen: [String] = []                 // 这次运行中按过快捷键的日子（yyyyMMdd）
     var hotkeyDaysReported = Set<String>()
+
+    // 上传记录到 Google Drive
+    let uploadQueue = DispatchQueue(label: "local.presenter.upload")
+    var uploadBusy = false
+    var uploadRerun = false
+    var uploadWaiters: [() -> Void] = []
+    var uploadStatus = "还没上传过"
+    var uploadArg = false               // --upload：不投影，只上传，传完退出
+    var quitUploadDone = false
+    var recordingFinished = false
     var reviewMode = false             // --review：只复查字幕记录，然后退出
     var reviewArg: String?
     var reviewBusy = false
@@ -3669,6 +3796,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         loadConfig()
         if reviewMode {
             startReviewMode()
+            return
+        }
+        if uploadArg {
+            reviewMode = true           // 和复查一样：不投影，不统计快捷键
+            startUploadMode()
             return
         }
         applyEvents()
@@ -3729,6 +3861,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         startCaptionServer()
         logSummary()
         periodicChecks()
+        if uploadReady && cfg.upload.onLaunch {
+            DispatchQueue.main.asyncAfter(deadline: .now() + cfg.upload.launchDelaySeconds) { [weak self] in
+                self?.startUpload(reason: "启动后补传", wait: 300)
+            }
+        }
 
         let t = Timer(timeInterval: 0.05, target: self, selector: #selector(tick), userInfo: nil, repeats: true)
         t.tolerance = 0.01
@@ -3740,10 +3877,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.showLaunchHUD() }
     }
 
-    func applicationWillTerminate(_ notification: Notification) {
+    /// 退出前要写完的记录（快捷键报告、Kaleo 最后几句、识别器里还没写的句子）。退出前上传时先做这一步，只做一次
+    func finishRecording() {
+        guard !recordingFinished else { return }
+        recordingFinished = true
         applicationWillTerminateHotkeyReport()
         flushKaleo(final: true)
         recognizer?.stop()
+    }
+
+    /// 退出前上传：先把记录写完，再上传（最多等 upload.quitWaitSeconds 秒），然后才真正退出
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !quitUploadDone, !reviewMode, uploadReady, cfg.upload.onQuit else { return .terminateNow }
+        quitUploadDone = true
+        finishRecording()
+        let wait = cfg.upload.quitWaitSeconds
+        infoHUD.show("正在上传记录到 Google Drive…（最多 \(Int(wait)) 秒，传完自动退出）", on: builtInScreen() ?? NSScreen.main, seconds: nil)
+        var replied = false
+        let done = {
+            guard !replied else { return }
+            replied = true
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        startUpload(reason: "退出前", wait: wait) { done() }
+        // 保险：上传卡住了也照样退出
+        DispatchQueue.main.asyncAfter(deadline: .now() + wait + 10) {
+            if !replied { writeLog("⚠️ 上传超时，直接退出（没传完的下次启动时补传）") }
+            done()
+        }
+        return .terminateLater
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        finishRecording()
         captionServer?.stop()
         hotKeys.unregisterAll()
         if let a = activity { ProcessInfo.processInfo.endActivity(a) }
@@ -3785,6 +3951,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
                 if let v = value(), let n = Int(v), n >= 0 { channelArg = n }
             case "--lang":
                 if let v = value() { langArg = v.lowercased().hasPrefix("en") ? "en-US" : "zh-CN" }
+            case "--upload":
+                uploadArg = true
             case "--review":
                 reviewMode = true
                 if i + 1 < args.count, !args[i + 1].hasPrefix("--") { reviewArg = value() }
@@ -3932,6 +4100,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
             if let v = c["overlay"] as? Bool { cfg.caption.overlay = v }
             if let v = c["pageZoom"] as? Double, v > 0 { cfg.caption.pageZoom = v }
             if let v = c["reloadIfStaleMinutes"] as? Double, v >= 0 { cfg.caption.reloadIfStaleMinutes = v }
+        }
+        if let u = obj["upload"] as? [String: Any] {
+            if let v = u["enabled"] as? Bool { cfg.upload.enabled = v }
+            if let v = u["url"] as? String { cfg.upload.url = v.trimmingCharacters(in: .whitespaces) }
+            if let v = u["token"] as? String { cfg.upload.token = v.trimmingCharacters(in: .whitespaces) }
+            if let v = u["onQuit"] as? Bool { cfg.upload.onQuit = v }
+            if let v = u["onLaunch"] as? Bool { cfg.upload.onLaunch = v }
+            if let v = u["quitWaitSeconds"] as? Double, v >= 5, v <= 600 { cfg.upload.quitWaitSeconds = v }
+            if let v = u["launchDelaySeconds"] as? Double, v >= 0, v <= 3600 { cfg.upload.launchDelaySeconds = v }
+            if let v = u["sinceDays"] as? Int, v >= 1, v <= 3650 { cfg.upload.sinceDays = v }
+            if let v = u["label"] as? String { cfg.upload.label = v.trimmingCharacters(in: .whitespaces) }
         }
         if let o = obj["obs"] as? [String: Any] {
             if let v = o["enabled"] as? Bool { cfg.obs.enabled = v }
@@ -6312,6 +6491,147 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         tick()
     }
 
+    // MARK: 上传记录到 Google Drive
+
+    var uploadURL: URL? {
+        guard let u = URL(string: cfg.upload.url), u.scheme == "https", u.host != nil else { return nil }
+        return u
+    }
+
+    /// 填了网址和暗号才上传
+    var uploadReady: Bool {
+        return cfg.upload.enabled && uploadURL != nil && !cfg.upload.token.isEmpty
+    }
+
+    var uploadStateURL: URL {
+        return baseDir.appendingPathComponent("upload-state.json")
+    }
+
+    /// Drive 里的日期文件夹名：2026-11-22，后面加这台电脑的名字（upload.label）；测试模式再加“测试”
+    func uploadFolder(day: String) -> String {
+        var s = day
+        let label = cfg.upload.label ?? (Host.current().localizedName ?? "")
+        if !label.isEmpty { s += " " + label }
+        if testMode { s += " 测试" }
+        return s
+    }
+
+    /// 要上传的文件：transcripts/ 里最近 sinceDays 天的 .txt，presenter.log 里每天的那一部分
+    func uploadItems() -> [UploadItem] {
+        var items: [UploadItem] = []
+        let cutoff = Date().addingTimeInterval(-Double(cfg.upload.sinceDays) * 86400)
+        let df = DateFormatter()
+        df.locale = Locale(identifier: "en_US_POSIX")
+        df.dateFormat = "yyyy-MM-dd"
+        let dayRE = try? NSRegularExpression(pattern: "(20[0-9]{2})([01][0-9])([0-3][0-9])", options: [])
+        let fm = FileManager.default
+        if let names = try? fm.contentsOfDirectory(atPath: transcriptFolder.path) {
+            for n in names.sorted() where n.lowercased().hasSuffix(".txt") && !n.hasPrefix(".") {
+                let u = transcriptFolder.appendingPathComponent(n)
+                guard let mod = modDate(u), mod >= cutoff, let data = try? Data(contentsOf: u) else { continue }
+                var day = df.string(from: mod)
+                let ns = n as NSString
+                if let m = dayRE?.firstMatch(in: n, options: [], range: NSRange(location: 0, length: ns.length)) {
+                    day = "\(ns.substring(with: m.range(at: 1)))-\(ns.substring(with: m.range(at: 2)))-\(ns.substring(with: m.range(at: 3)))"
+                }
+                items.append(UploadItem(key: "transcripts/" + n, folder: uploadFolder(day: day), name: n, data: data))
+            }
+        }
+        if let url = logFileURL, let text = readTextFile(url) {
+            let cutDay = df.string(from: cutoff)
+            for part in splitLogByDay(text) where part.day >= cutDay {
+                let compact = part.day.replacingOccurrences(of: "-", with: "")
+                items.append(UploadItem(key: "log/" + part.day, folder: uploadFolder(day: part.day),
+                                        name: "presenter-\(compact).log", data: Data(part.text.utf8)))
+            }
+        }
+        return items
+    }
+
+    /// 开始上传（在后台线程）。正在上传时，等这一轮完了再传一轮；done 在全部传完后（主线程）调用
+    func startUpload(reason: String, wait: TimeInterval, done: (() -> Void)? = nil) {
+        guard uploadReady, let url = uploadURL else {
+            done?()
+            return
+        }
+        if let d = done { uploadWaiters.append(d) }
+        if uploadBusy {
+            uploadRerun = true
+            return
+        }
+        uploadBusy = true
+        let items = uploadItems()
+        var known: [String: String] = [:]
+        if let d = try? Data(contentsOf: uploadStateURL),
+           let obj = (try? JSONSerialization.jsonObject(with: d, options: [])) as? [String: String] {
+            known = obj
+        }
+        let token = cfg.upload.token
+        let deadline = Date().addingTimeInterval(wait)
+        let stateURL = uploadStateURL
+        writeLog("上传记录（\(reason)）：检查 \(items.count) 个文件 → \(url.host ?? "")")
+        uploadQueue.async {
+            let r = runUpload(url: url, token: token, items: items, known: known, deadline: deadline)
+            if let d = try? JSONSerialization.data(withJSONObject: r.state, options: [.prettyPrinted, .sortedKeys]) {
+                try? d.write(to: stateURL, options: .atomic)
+            }
+            DispatchQueue.main.async { self.uploadFinished(r, reason: reason, wait: wait) }
+        }
+    }
+
+    func uploadFinished(_ r: UploadOutcome, reason: String, wait: TimeInterval) {
+        uploadBusy = false
+        var s = "\(hms(Date())) "
+        if r.failed.isEmpty && r.notTried == 0 {
+            s += r.uploaded.isEmpty ? "✅ 没有新文件（\(r.unchanged) 个已是最新）" : "✅ 上传 \(r.uploaded.count) 个，\(r.unchanged) 个没变"
+        } else {
+            s += "⚠️ 上传 \(r.uploaded.count) 个"
+            if !r.failed.isEmpty { s += "，失败 \(r.failed.count) 个（\(r.failed[0].error)）" }
+            if r.notTried > 0 { s += "，\(r.notTried) 个没来得及传（下次补传）" }
+        }
+        uploadStatus = s
+        writeLog("上传记录（\(reason)）：\(s)" + (r.uploaded.isEmpty ? "" : "：" + r.uploaded.prefix(10).joined(separator: "、")))
+        if uploadRerun {
+            uploadRerun = false
+            startUpload(reason: reason + "（再一轮）", wait: wait)
+            return
+        }
+        let waiters = uploadWaiters
+        uploadWaiters = []
+        for w in waiters { w() }
+    }
+
+    /// --upload（presenter.sh upload）：不投影，只上传，传完退出
+    func startUploadMode() {
+        let screen = builtInScreen() ?? NSScreen.main
+        writeLog("只上传记录（--upload）")
+        guard uploadReady else {
+            let msg = "上传记录：config-local.json 里还没填 upload.url 和 upload.token（或 upload.enabled 是 false）"
+            writeLog("⚠️ " + msg)
+            infoHUD.show(msg, on: screen, seconds: 8)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 8) { NSApp.terminate(nil) }
+            return
+        }
+        infoHUD.show("正在上传记录到 Google Drive…", on: screen, seconds: nil)
+        startUpload(reason: "手动（--upload）", wait: 600) { [weak self] in
+            guard let self = self else { return }
+            self.infoHUD.show("上传记录：\(self.uploadStatus)", on: screen, seconds: 5)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) { NSApp.terminate(nil) }
+        }
+    }
+
+    @objc func menuUploadNow() {
+        guard uploadReady else {
+            infoHUD.show("上传记录：config-local.json 里还没填 upload.url 和 upload.token", on: builtInScreen(), seconds: 5)
+            return
+        }
+        infoHUD.show("正在上传记录到 Google Drive…", on: builtInScreen(), seconds: 3)
+        startUpload(reason: "手动", wait: 300) { [weak self] in
+            guard let self = self else { return }
+            self.infoHUD.show("上传记录：\(self.uploadStatus)", on: self.builtInScreen(), seconds: 5)
+        }
+    }
+
     // MARK: 菜单栏
 
     func setupStatusItem() {
@@ -6675,6 +6995,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         let tm = NSMenu()
         addAction(tm, nil, "打开 Presenter 文件夹", #selector(menuOpenBase))
         addAction(tm, nil, "查看日志", #selector(menuOpenLog))
+        tm.addItem(NSMenuItem.separator())
+        if uploadReady {
+            addAction(tm, nil, uploadBusy ? "正在上传记录到 Google Drive…" : "上传记录到 Google Drive（现在）", #selector(menuUploadNow))
+            addInfo(tm, "上次上传：\(uploadStatus)")
+        } else {
+            addInfo(tm, "上传记录到 Google Drive：没有设置（config-local.json 的 upload.url / token）")
+        }
         tools.submenu = tm
         menu.addItem(tools)
 
@@ -6850,6 +7177,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
             writeLog("字幕记录分文件：其他时间 → \(cfg.transcriptDefault).txt")
         }
         writeLog("快捷键统计：" + (cfg.hotkeyStats ? "记到 hotkey-usage.csv，退出前在日志里写报告" : "关"))
+        if uploadReady {
+            var s = "上传记录到 Google Drive：\(uploadURL?.host ?? "")；"
+            s += [cfg.upload.onQuit ? "退出前（最多 \(Int(cfg.upload.quitWaitSeconds)) 秒）" : nil,
+                  cfg.upload.onLaunch ? "启动 \(Int(cfg.upload.launchDelaySeconds)) 秒后补传" : nil].compactMap { $0 }.joined(separator: "、")
+            s += "；最近 \(cfg.upload.sinceDays) 天；文件夹“\(uploadFolder(day: "日期"))”"
+            writeLog(s)
+        } else {
+            writeLog("上传记录到 Google Drive：" + (cfg.upload.enabled ? "没有设置（config-local.json 的 upload.url / token）" : "关"))
+        }
         var bg = "后台识别并记录：" + (backgroundTranscribe ? "开（启动时自动打开）" : "关")
         if !backgroundTranscribe && cfg.caption.apple.backgroundTranscribe {
             bg += noBackgroundArg ? "（--nobackground）" : (recognizer == nil ? "（本机识别不可用）" : "（saveTranscript 是 false）")

@@ -4,6 +4,7 @@ bin/
 presenter.log
 cron.log
 hotkey-usage.csv
+upload-state.json
 gdrive-state.json
 transcripts/
 caption-dump-*

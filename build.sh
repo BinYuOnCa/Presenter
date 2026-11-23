@@ -66,6 +66,7 @@ RELEASE_FILES=(
   OP_Manual.md
   "images/把LogoNew.png放这里.txt"
   pdf/sample.pdf
+  tools/presenter-upload.gs
 )
 
 if [ "$RELEASE" = 1 ]; then
@@ -158,6 +159,7 @@ gdrive-sa.json
 presenter.log
 cron.log
 hotkey-usage.csv
+upload-state.json
 gdrive-state.json
 transcripts/
 caption-dump-*

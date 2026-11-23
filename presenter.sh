@@ -9,6 +9,7 @@
 #   ./presenter.sh autostart off|status  取消 / 查看自动启动
 #   ./presenter.sh update                从 GitHub 的 release 分支更新到最新版本
 #   ./presenter.sh review [20261115]     复查字幕记录（默认最近一天）
+#   ./presenter.sh upload                把字幕记录和日志上传到 Google Drive（不投影，传完退出）
 #   ./presenter.sh log                   看实时日志（Ctrl+C 结束）
 #
 # 自动启动：到时 Mac 必须开机、已登录且没有锁屏（合盖睡眠时 cron 不会运行，错过不补）。
@@ -20,7 +21,7 @@ TAG="# Presenter-autostart"
 REPO_URL="${PRESENTER_REPO:-https://github.com/BinYuOnCa/Presenter.git}"
 BRANCH="${PRESENTER_BRANCH:-release}"
 
-usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; }
 need_app() { [ -d "$APP" ] || { echo "❌ 找不到 $APP"; exit 1; }; }
 running() { pgrep -x Presenter >/dev/null 2>&1; }
 stop_app() {
@@ -156,6 +157,10 @@ case "$cmd" in
     update ;;
   review)
     need_app; /usr/bin/open "$APP" --args --review "$@" ;;
+  upload)
+    need_app
+    if running; then echo "Presenter 正在运行：用菜单 › 工具 › 上传记录到 Google Drive（退出时也会自动上传）"; exit 1; fi
+    /usr/bin/open "$APP" --args --upload "$@" ;;
   log)
     touch "$DIR/presenter.log"; tail -n 50 -f "$DIR/presenter.log" ;;
   *)

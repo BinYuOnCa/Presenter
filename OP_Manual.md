@@ -325,7 +325,7 @@ Presenter 运行时在本机提供字幕网页 `http://127.0.0.1:8765/caption`�
   - 术语表和字幕记录：术语表和今日术语的条数、打开教会术语表、打开今日术语、重新载入术语表、打开今天的字幕记录、复查最近一天的字幕记录、打开字幕记录文件夹。
   - OBS：字幕叠加状态（是否已连接）、复制 OBS 字幕网址、在浏览器里预览 OBS 字幕页、显示方式（跟投影字幕条一起 / 字幕时段内一直显示）。
   - Kaleo：显示方式（提取文字 / 原网页）、重新载入翻译网页、打开可点击的翻译网页窗口、保存网页结构和截图。
-- **工具**：打开 Presenter 文件夹、查看日志。
+- **工具**：打开 Presenter 文件夹、查看日志、上传记录到 Google Drive（现在）和上次上传的结果。
 - **快捷键**：每个快捷键是否启用、有没有冲突、读到了几个 OBS 绑定。
 - **退出 Presenter**。
 
@@ -413,6 +413,7 @@ Presenter 运行时在本机提供字幕网页 `http://127.0.0.1:8765/caption`�
 | `--channel 1` | 只用第 1 路输入（0 = 混合） |
 | `--lang en` | 这次识别英语（`zh` = 普通话） |
 | `--review` / `--review 20261115` | 不投影，只复查最近一天 / 某一天的字幕记录 |
+| `--upload` | 不投影，只把字幕记录和日志上传到 Google Drive（`presenter.sh upload`） |
 
 **常用组合**
 
@@ -460,6 +461,8 @@ Presenter 运行时在本机提供字幕网页 `http://127.0.0.1:8765/caption`�
 | `glossary.beforeTranslation` | `true` | 翻译前把术语换成译名 |
 | `glossary.fuzzy` / `fuzzyMinLength` | `today` / 3 | 读音纠正：只对今日术语 / `all` / `off`；几个字以上才做 |
 | `glossary.pdfTerms` / `termsFile` / `fromGoogleDrive` | `true` / `^terms-{date}\.(csv\|txt)$` / `true` | 从 PDF 找今日术语、今日术语文件名、从 Google Drive 下载 |
+| `upload.url` / `token` | 写在 `config-local.json` | 上传记录到 Google Drive 的 Apps Script 网址和暗号；没填不上传 |
+| `upload.onQuit` / `quitWaitSeconds` / `onLaunch` / `sinceDays` | `true` / 60 / `true` / 30 | 退出前上传（最多等几秒）、启动后补传、只传最近几天 |
 | `obs.enabled` / `port` | `true` / 8765 | OBS 字幕页 `http://127.0.0.1:8765/caption` |
 | `obs.visibility` | `same` | `same` = 跟投影字幕条一起显示/隐藏；`auto` = 字幕时段内一直显示 |
 | `obs.lines` / `heightPercent` / `bottomPercent` / `marginPercent` | 3 / 15 / 4 / 10 | 叠加字幕的行数，占视频高度、离底边、左右留白的百分比 |
@@ -493,6 +496,8 @@ Presenter 运行时在本机提供字幕网页 `http://127.0.0.1:8765/caption`�
 | `transcripts/review-日期.txt` | 字幕复查报告 | 自动生成 |
 | `presenter.log` | 运行日志（菜单 › 工具 › 查看日志）；退出前写当天的快捷键使用报告 | 自动生成 |
 | `hotkey-usage.csv` | 每次按快捷键的记录（统计使用频率用） | 自动生成 |
+| `upload-state.json` | 哪些记录已经上传到 Google Drive（删掉 = 全部重传） | 自动生成 |
+| `tools/presenter-upload.gs` | 上传接收端的 Apps Script 代码（设置步骤见 README 第三节） | 自动更新 |
 | `cron.log` | 自动启动记录 | 自动生成 |
 | `gdrive-state.json` | 上次从 Google Drive 下载的版本（删掉也没关系） | 自动生成 |
 | `caption-dump-*` | “保存网页结构和截图”生成（调整 Kaleo 用） | 自动生成 |
