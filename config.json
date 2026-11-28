@@ -97,7 +97,7 @@
   "_hotkeyStats说明": "true = 每按一次快捷键记一行到 Presenter 文件夹的 hotkey-usage.csv（日期、时间、动作、按键，所有日子在同一个文件里，可用 Excel 统计不同时段的使用频率）；Presenter 退出前在 presenter.log 里写当天的快捷键使用报告（每 5 分钟一格的各快捷键次数，以及总计）。",
   "hotkeyStats": true,
 
-  "_upload说明": "上传记录到 Google Drive：把 transcripts 文件夹里的字幕记录和 presenter.log（按日期切开，存成 presenter-yyyymmdd.log）上传到 Google Drive 一个专用文件夹（不是放 PDF 的那个）。接收端是自己 Google 账号里的 Apps Script 网页应用（代码在 tools/presenter-upload.gs，设置步骤见 README）。url（网页应用网址）和 token（暗号）写在 config-local.json 里，没填就不上传。onQuit：退出前上传，最多等 quitWaitSeconds 秒；onLaunch：启动 launchDelaySeconds 秒后补传上次没传上的；sinceDays：只传最近几天的文件。内容没变的文件不重复上传（记在 upload-state.json）。Drive 里按日期分文件夹，例如“2026-11-22 MacBook Air”；label：日期后面加的名字，不写 = 这台电脑的名字，\"\" = 不加。也可以手动：菜单 › 工具 › 上传记录到 Google Drive，或 ./presenter.sh upload。",
+  "_upload说明": "上传记录到 Google Drive：把 transcripts 文件夹里的字幕记录和 presenter.log（按日期切开，存成 presenter-yyyymmdd.log）上传到 Google Drive 的日期文件夹；其他 *.log（cron.log 等）和 hotkey-usage.csv 整份上传到“日志 电脑名”文件夹。都上传到 Google Drive 一个专用文件夹（不是放 PDF 的那个）。接收端是自己 Google 账号里的 Apps Script 网页应用（代码在 tools/presenter-upload.gs，设置步骤见 README）。url（网页应用网址）和 token（暗号）写在 config-local.json 里，没填就不上传。onQuit：退出前上传，最多等 quitWaitSeconds 秒；onLaunch：启动 launchDelaySeconds 秒后补传上次没传上的；sinceDays：只传最近几天的文件。内容没变的文件不重复上传（记在 upload-state.json）。Drive 里按日期分文件夹，例如“2026-11-22 MacBook Air”；label：日期后面加的名字，不写 = 这台电脑的名字，\"\" = 不加。也可以手动：菜单 › 工具 › 上传记录到 Google Drive，或 ./presenter.sh upload。",
   "upload": {
     "enabled": true,
     "onQuit": true,

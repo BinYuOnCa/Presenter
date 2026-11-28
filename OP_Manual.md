@@ -462,7 +462,7 @@ Presenter 运行时在本机提供字幕网页 `http://127.0.0.1:8765/caption`�
 | `glossary.fuzzy` / `fuzzyMinLength` | `today` / 3 | 读音纠正：只对今日术语 / `all` / `off`；几个字以上才做 |
 | `glossary.pdfTerms` / `termsFile` / `fromGoogleDrive` | `true` / `^terms-{date}\.(csv\|txt)$` / `true` | 从 PDF 找今日术语、今日术语文件名、从 Google Drive 下载 |
 | `upload.url` / `token` | 写在 `config-local.json` | 上传记录到 Google Drive 的 Apps Script 网址和暗号；没填不上传 |
-| `upload.onQuit` / `quitWaitSeconds` / `onLaunch` / `sinceDays` | `true` / 60 / `true` / 30 | 退出前上传（最多等几秒）、启动后补传、只传最近几天 |
+| `upload.onQuit` / `quitWaitSeconds` / `onLaunch` / `sinceDays` | `true` / 60 / `true` / 30 | 退出前上传（最多等几秒）、启动后补传、只传最近几天；字幕记录和 `presenter.log` 按日期分文件夹，其他 `*.log` 和 `hotkey-usage.csv` 整份放进“日志”文件夹 |
 | `obs.enabled` / `port` | `true` / 8765 | OBS 字幕页 `http://127.0.0.1:8765/caption` |
 | `obs.visibility` | `same` | `same` = 跟投影字幕条一起显示/隐藏；`auto` = 字幕时段内一直显示 |
 | `obs.lines` / `heightPercent` / `bottomPercent` / `marginPercent` | 3 / 15 / 4 / 10 | 叠加字幕的行数，占视频高度、离底边、左右留白的百分比 |
