@@ -175,6 +175,7 @@ Presenter 退出前把 `transcripts/` 里的字幕记录和 `presenter.log` 上�
 - 启动 60 秒后补传上次没传上的（例如退出时没网），以及上次退出后才写进日志的最后几行。
 - 随时手动：菜单 › 工具 › 上传记录到 Google Drive（菜单里也显示上次上传的结果）；Presenter 没运行时 `./presenter.sh upload`。
 - 传最近 30 天（`upload.sinceDays`）`transcripts/` 里的 `.txt`（本机识别、`_Kaleo`、`review-`、`asrtest-`），和 `presenter.log` 里每天的那部分（存成 `presenter-20261122.log`）。
+- 其他日志整份上传到 `日志 MacBook Air` 文件夹：Presenter 文件夹里除 `presenter.log` 以外的所有 `*.log`（例如自动启动的 `cron.log`，以后新增的也算）和 `hotkey-usage.csv`；同样只传最近 30 天改过的，超过 20 MB 的跳过并记日志。
 - Drive 里按日期分文件夹，后面加这台电脑的名字：`2026-11-22 MacBook Air/Worship_20261122.txt`（`upload.label` 可改，`""` = 不加；测试模式再加“测试”）。
 - 内容没变的不重复上传（记在 `upload-state.json`，删掉它就全部重传一遍）；同名旧版本进 Drive 回收站。
 - 没网、出错只记日志和菜单，不影响投影和字幕。日志里只写 `script.google.com`，不写网址和暗号。

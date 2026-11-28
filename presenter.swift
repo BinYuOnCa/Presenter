@@ -6516,7 +6516,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
         return s
     }
 
-    /// 要上传的文件：transcripts/ 里最近 sinceDays 天的 .txt，presenter.log 里每天的那一部分
+    /// 要上传的文件：transcripts/ 里最近 sinceDays 天的 .txt，presenter.log 里每天的那一部分，
+    /// 以及最近 sinceDays 天改过的其他 *.log 和 hotkey-usage.csv（整份）
     func uploadItems() -> [UploadItem] {
         var items: [UploadItem] = []
         let cutoff = Date().addingTimeInterval(-Double(cfg.upload.sinceDays) * 86400)
@@ -6543,6 +6544,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, WKNavi
                 let compact = part.day.replacingOccurrences(of: "-", with: "")
                 items.append(UploadItem(key: "log/" + part.day, folder: uploadFolder(day: part.day),
                                         name: "presenter-\(compact).log", data: Data(part.text.utf8)))
+            }
+        }
+        // 其他日志整份上传到“日志”文件夹：Presenter 文件夹里除 presenter.log 以外的 *.log（cron.log 等，以后新加的也算）和 hotkey-usage.csv
+        if let names = try? fm.contentsOfDirectory(atPath: baseDir.path) {
+            let logName = logFileURL?.lastPathComponent ?? "presenter.log"
+            let wholeFiles = names.sorted().filter { n in
+                !n.hasPrefix(".") && n != logName && (n.lowercased().hasSuffix(".log") || n == hotkeyUsageURL.lastPathComponent)
+            }
+            for n in wholeFiles {
+                let u = baseDir.appendingPathComponent(n)
+                guard let mod = modDate(u), mod >= cutoff, let data = try? Data(contentsOf: u) else { continue }
+                if data.count > 20_000_000 {
+                    writeLog("上传：\(n) 太大（\(data.count / 1_000_000) MB），这次不传")
+                    continue
+                }
+                items.append(UploadItem(key: "file/" + n, folder: uploadFolder(day: "日志"), name: n, data: data))
             }
         }
         return items
